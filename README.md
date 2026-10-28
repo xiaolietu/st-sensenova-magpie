@@ -110,7 +110,7 @@ printf '%s\n%s\n%s\n.\n' "$SENSENOVA_API_KEY" "$ACCOUNT" "$PASSWORD" | magpie pl
 | `locale` | `auto` | `zh` / `en` / `auto`（跟随本机） |
 | `credentialsFile` | `~/.sensenova-quota.json` | 控制台凭据文件位置。**它只改变写回路径，不能关闭写回** |
 
-另有环境变量 `SENSENOVA_QUOTA_CONFIG` 可以覆盖凭据文件路径，优先级高于 `credentialsFile`。
+凭据文件的解析顺序是：`credentialsFile` 选项 → 环境变量 `SENSENOVA_QUOTA_CONFIG` → `~/.sensenova-quota.json`。**选项优先**，只有它没设置时才看环境变量。
 
 ### 关于 `locale`
 
@@ -248,7 +248,7 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 | --- | --- | --- | --- |
 | API Key | `~/.config/magpie/plugin-auth.json` | `key`（`type: "api"`） | 调用 Token Plan 模型 |
 | 账号 + 密码（仅在你填写时） | 同一文件的 `metadata` 下 | `metadata.email` / `metadata.password` | **整个账号** |
-| 控制台 OAuth 令牌 | 同一文件的 `metadata`，或 `~/.sensenova-quota.json` | `access` / `refresh` / `cookie` / `iam_base` | 读取额度、续期令牌 |
+| 控制台 OAuth 令牌 | 同一文件的 `metadata`，或 `~/.sensenova-quota.json` | `access_token` / `refresh_token` / `id_token` / `cookie` / `iam_base` | 读取额度、续期令牌、取账号名 |
 | 会话 Cookie（仅在你提供时） | 同上 | `metadata.cookie` | 无需密码即可换控制台令牌 |
 
 **账号密码能做的不只是读额度。** 它能登录 SenseNova 控制台、创建和删除 API Key，以及该账号能做的一切。把它交给插件，等于把整个账号交给 Magpie 的凭据文件 —— 这是本插件要求的最高权限。**留空完全可以正常使用**（见第 5 条）。
@@ -457,7 +457,7 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 node --test test/*.test.mjs
 ```
 
-当前 80 个测试，覆盖：
+当前 81 个测试，覆盖：
 
 - 积分池到窗口的映射（`used` 百分比、`amount`、`limit`、`span`、`resetsAt`、专属池的模型圈定、赠送余额）；
 - `limit - amount` 能复现控制台的余额；

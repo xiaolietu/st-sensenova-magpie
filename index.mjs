@@ -80,6 +80,11 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       redirect_uri: fromFile.redirect_uri,
       access_token: fromFile.access_token,
       refresh_token: fromFile.refresh_token,
+      // Kept so `accountNameOf` can still name the account when the access
+      // token is opaque rather than a JWT. `applyToken` writes this back to
+      // the file, so dropping it here would make the stored copy dead weight
+      // and lose the name on the next start.
+      id_token: fromFile.id_token,
       expires_at: fromFile.expires_at,
       cookie: fromAuth.cookie ?? fromFile.cookie,
       username: fromAuth.username ?? fromFile.username,

@@ -8,6 +8,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { SenseNovaPlugin } from "../index.mjs";
 
@@ -109,4 +112,31 @@ test("额度读取成功时不上报 error，且带出 plan 与窗口", async ()
   assert.equal(q.windows[0].amount, 40);
   assert.equal(q.windows[0].limit, 100);
   assert.equal(q.windows[0].used, 40);
+});
+
+test("凭据文件里的 id_token 仍能给出账号名", async () => {
+  // The access token can be opaque; the name then only exists in id_token.
+  // Dropping it on read loses the account name on every start.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sn-creds-"));
+  const file = path.join(dir, "creds.json");
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const idToken = `${b64({ alg: "none" })}.${b64({ id_token: { username: "账号真名" } })}.sig`;
+
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      access_token: "opaque-not-a-jwt",
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      id_token: idToken,
+    })
+  );
+
+  try {
+    globalThis.fetch = routed([]);
+    const plugin = await SenseNovaPlugin({}, { credentialsFile: file });
+    const q = await plugin.auth.usage(async () => ({ key: "sk-1" }));
+    assert.equal(q.user, "账号真名");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
