@@ -26,7 +26,7 @@
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, readAuth } from "./internal.mjs";
-import { DEFAULT_BASE_URL, DEFAULT_EXCLUDED_MODELS, NPM, createCatalog, excludeModels, toProviderModel } from "./models.mjs";
+import { DEFAULT_BASE_URL, NPM, createCatalog, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -47,11 +47,6 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
     quotaTtlMs: Number(options.quotaTtlMs) > 0 ? Number(options.quotaTtlMs) : DEFAULT_QUOTA_TTL_MS,
     scopeModel: typeof options.scopeModel === "string" ? options.scopeModel : "flash-lite",
     credentialsFile: options.credentialsFile ?? undefined,
-    // `undefined` means "use the deny-list"; an explicit array (including `[]`)
-    // is taken as given, so a plan that serves these ids can clear it.
-    excludeModels: Array.isArray(options.excludeModels)
-      ? options.excludeModels.filter((id) => typeof id === "string")
-      : DEFAULT_EXCLUDED_MODELS,
   };
   const catalog = createCatalog({ baseURL: opts.baseURL });
 
@@ -168,7 +163,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       cfg.provider ??= {};
       const was = cfg.provider[PROVIDER] ?? {};
       cfg.provider[PROVIDER] = {
-        name: "日日新模型平台",
+        name: "商汤日日新",
         npm: NPM,
         api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
@@ -181,10 +176,9 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       /**
        * The models this account can actually use, straight from `/v1/models`.
        *
-       * Two things are removed from what the endpoint returns: the image
-       * creation models (dropped in the catalog) and the ids named in
-       * `excludeModels` — models the endpoint advertises but the plan refuses
-       * with 403. Everything else is passed through untouched.
+       * The only thing removed is the image-creation models, which the catalog
+       * drops because this provider speaks chat completions only. Everything
+       * else the endpoint returns is passed through untouched.
        *
        * On failure the last list that was fetched is served and marked with
        * Magpie's fallback flag, so a transient error does not empty the model
@@ -193,20 +187,17 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
-        const asProvider = (list) => {
-          const shown = excludeModels(list, opts.excludeModels);
-          return Object.fromEntries(
-            shown.map((m) => [
+        const asProvider = (list) =>
+          Object.fromEntries(
+            list.map((m) => [
               m.id,
               toProviderModel(m, id, { baseURL: opts.baseURL ?? catalog.baseURL }),
             ])
           );
-        };
         /** What to serve when the live list is unavailable. */
         const remembered = () => {
           const known = catalog.peek();
-          const shown = known?.length ? asProvider(known) : null;
-          return fellBack(shown && Object.keys(shown).length ? shown : (provider?.models ?? {}));
+          return fellBack(known?.length ? asProvider(known) : (provider?.models ?? {}));
         };
 
         const key = apiKeyOf(auth);
@@ -214,8 +205,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         try {
           const live = await catalog.load(key);
           if (!live.length) return remembered();
-          const shown = asProvider(live);
-          return Object.keys(shown).length ? shown : remembered();
+          return asProvider(live);
         } catch (error) {
           log("warn", `sensenova: keeping the known model list: ${error.message}`);
           return remembered();
@@ -286,17 +276,20 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       methods: [
         {
           type: "api",
-          label: "日日新模型平台账号",
+          label: "商汤日日新 API key",
           placeholder: "sk-…",
           prompts: [
             {
               type: "text",
-              // `email` rather than `username`: Magpie names an account from
-              // `accountId`, then `metadata.email`, then `email`, and only
-              // otherwise labels it by the credential. A prompt's key is what
-              // lands in `metadata`, so naming the field `email` is what makes
-              // the account row read as the account instead of "API key …HohJ".
-              // Reading it back is `consoleAuthOf`'s job.
+              // `email` 而不是 `username`：这是 Magpie 的硬性命名规则决定的。
+              //
+              // Magpie 给账号命名只认 `accountId` → `metadata.email` → `email`，
+              // 而提示项的 `key` 决定答案落进 `metadata` 的哪个字段。把字段命名
+              // 成 `email`，账号行才会显示用户填的用户名；命名成 `username` 就
+              // 会掉到兜底，显示成 `API key …HohJ`。
+              //
+              // 字段名叫 email、装的是用户名 —— 这是为了显示不得不做的妥协，
+              // 不是笔误。值本身不会丢：`consoleAuthOf` 两个拼写都读。
               key: "email",
               message: t.promptAccount,
               placeholder: t.placeholderAccount,

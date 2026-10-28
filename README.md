@@ -60,7 +60,7 @@ magpie plugin add <本仓库路径>
 magpie plugin login sensenova
 ```
 
-插件在 Magpie 里显示为「**日日新模型平台**」，添加第二个账号时按钮是「添加另一个日日新模型平台账号」—— 这两个名字都取自供应商的显示名，不单独维护。
+插件在 Magpie 里显示为「**商汤日日新**」，key 输入框的标题是「商汤日日新 API key」。两者来源不同：前者是供应商显示名（`config` 钩子的 `name`），后者是登录方法的 `label`。「添加另一个 …… 账号」这类按钮由 Magpie 自己生成，文案跟随供应商名（文档未写明模板，属推断）。
 
 ### 登录会问什么
 
@@ -68,9 +68,11 @@ magpie plugin login sensenova
 
 | 顺序 | 提问 | 必填 | 来源 |
 | --- | --- | --- | --- |
-| 1 | 日日新模型平台账号（登录用的用户名） | 否 | 插件提问 |
+| 1 | 商汤日日新用户名 | 否 | 插件提问（占位提示「用户名」） |
 | 2 | 账号密码 | 否 | 插件提问 |
-| 3 | **日日新模型平台 API Key** | **是** | Magpie 自己的 key 输入框（标题取自方法的 `label`） |
+| 3 | **商汤日日新 API key** | **是** | Magpie 自己的 key 输入框（标题取自方法的 `label`） |
+
+第 1 项填的是**控制台的用户名**，不是手机号 —— 手机号是官网登录用的（要走短信验证码），控制台的账号登录走「用户名 + 密码」。填错的话额度会报登录失败，但模型调用不受影响。
 
 第 3 项由宿主提供，插件不再重复问一遍 —— 早期版本额外声明了一条 key 提示，导致同一把 key 要输入两次，已移除。没有 Key 供应商发不出任何请求。
 
@@ -80,9 +82,9 @@ magpie plugin login sensenova
 
 ### 账号行显示的名字
 
-Magpie 给账号命名时依次看 `accountId`、`metadata.email`、`email`，都不存在时才退化为用凭据本身命名 —— 也就是你可能见过的 `API key …HohJ`。
+Magpie 给账号命名时依次看 `accountId`、`metadata.email`、`email`，都不存在时才退化为用凭据本身命名 —— 也就是你可能见过的 `API key …HohJ`。这是一条**固定规则，插件改不了**。
 
-所以这个名字**在登录那一刻定下来**：填了账号字段，行上就显示那个手机号或邮箱；留空就保持 API Key 兜底命名。
+所以这个名字**在登录那一刻定下来**：填了账号字段，行上就显示那个用户名；留空就保持 API Key 兜底命名。
 
 实测下来只有一条路走得通，其余几条都会失败：
 
@@ -91,7 +93,9 @@ Magpie 给账号命名时依次看 `accountId`、`metadata.email`、`email`，�
 - **`metadata` 不能由代码塞**，Magpie 用提示收集到的答案覆盖它。
 - **`usage.user` 也不会改名。** 钩子返回的 `user` 只存在 Magpie 的额度缓存里（`quotas.json` → `quota.user`），账号行仍渲染登录时的标签。
 
-所以本插件不声明 `authorize` —— 它对命名没有帮助，只用来校验 key，而宿主已经负责收集。
+**为什么字段叫 `email` 却装用户名**：因为命名规则只认 `metadata.email`，名字必须这么写，账号行才会显示你填的值。这是为显示妥协的结果，不是笔误 —— 值不会丢，`consoleAuthOf` 三个拼写（`email` / `username` / `account`）都读。
+
+另外，本插件不声明 `authorize` —— 它对命名没有帮助，只用来校验 key，而宿主已经负责收集。
 
 更早的登录把账号存在 `metadata.username` 下，所以 `consoleAuthOf` 仍会读这个拼写（以及 `account`）作为回退。**如果你在支持这个行为之前就登录过**，存下的标签仍是 API Key 那种，重跑一次 `magpie plugin login sensenova` 即可。
 
@@ -171,21 +175,11 @@ Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入
 
 `deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。平台自己的模型总览也没有列它。
 
-所以这个 id 只能按名字排除，`excludeModels` 默认值就是它：
-
-```json
-{ "options": { "excludeModels": ["deepseek-v4.1-flash"] } }
-```
-
-**这不是快照，是黑名单**：名单之外的模型仍然全部来自接口，接口新增什么就显示什么。如果你的套餐实际能调用它（或者平台以后补货），把它从名单里去掉、或直接传 `[]` 全量显示：
-
-```bash
-magpie plugin options sensenova '{"excludeModels": []}'
-```
+所以插件**照实列出**，不做过滤：能过滤的依据只有 id，而写死 id 就成了第二份快照，换账号或平台补货都会误判。遇到 403 就是套餐不含该模型。
 
 另有一种**限流**：连续快速请求时 `deepseek-flash` 会返回 `429 inference exceeds tpm/rpm limit`，等待 20 秒后恢复正常。这是速率限制，不是模型不可用。
 
-文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**，差异由这条黑名单兜住。
+文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**。
 
 ---
 
@@ -273,7 +267,6 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 | `scopeModel` | `flash-lite` | 当接口没有给出 `model_ids` 时，用哪个关键词圈定专属池的模型 |
 | `locale` | `auto` | `zh` / `en` / `auto`（跟随本机） |
 | `credentialsFile` | `~/.sensenova-quota.json` | 控制台凭据文件位置。**它只改变写回路径，不能关闭写回** |
-| `excludeModels` | `["deepseek-v4.1-flash"]` | 从模型列表里剔除的 id。接口会列出当前套餐不可用的模型，这里按 id 排除；传 `[]` 则完全照接口显示 |
 
 凭据文件的解析顺序是：`credentialsFile` 选项 → 环境变量 `SENSENOVA_QUOTA_CONFIG` → `~/.sensenova-quota.json`。**选项优先**，只有它没设置时才看环境变量。
 
@@ -295,7 +288,7 @@ magpie plugin options sensenova '{"locale":"en"}'
 
 ## 六、已知限制
 
-- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段，所以只能按 id 用 `excludeModels` 排除 —— 默认已排除该 id，遇到别的 403 就把它加进名单。
+- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段，所以插件照实展示 —— 遇到 403 就是套餐不含该模型。
 - **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
@@ -504,7 +497,7 @@ Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（�
 node --test test/*.test.mjs
 ```
 
-当前 88 个测试，覆盖：
+当前 81 个测试，覆盖：
 
 - 积分池到窗口的映射（`used` 百分比、`amount`、`limit`、`span`、`resetsAt`、专属池的模型圈定、赠送余额）；
 - `limit - amount` 能复现控制台的余额；
@@ -514,7 +507,6 @@ node --test test/*.test.mjs
 - `__` 前缀的内部键不会写进凭据文件；
 - 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
 - 模块不携带任何内置模型清单（`FALLBACK_MODELS` 必须不存在）；
-- 模型黑名单（默认值就是被套餐拒绝的 `deepseek-v4.1-flash`、传 `[]` 全量显示、自定义名单是替换而非叠加、非字符串条目被忽略）；
 - 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；
 - 登录方法只声明 `email` 与 `password` 两条提示，不含 `key`，也不声明 `authorize`（key 由宿主自己的输入框收集）；

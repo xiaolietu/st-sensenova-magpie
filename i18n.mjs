@@ -51,7 +51,7 @@ const ZH = {
   loginNoPermission: "该账号没有权限",
   loginTooFrequent: "操作过于频繁",
 
-  promptAccount: "可选：日日新模型平台账号，用来读取控制台积分额度（留空则读 snquota 已存的凭据）",
+  promptAccount: "可选：商汤日日新用户名，用来读取控制台积分额度（留空则读 snquota 已存的凭据）",
   promptPassword: "可选：账号密码（明文保存在本机 plugin-auth.json，仅用于读取额度）",
   placeholderAccount: "用户名",
   placeholderPassword: "留空 = 不保存密码",
@@ -90,7 +90,7 @@ const EN = {
   loginNoPermission: "This account has no permission",
   loginTooFrequent: "Too many attempts",
 
-  promptAccount: "Optional: the SenseNova platform account used to read the console's credit quota (blank reads the credentials snquota already stored)",
+  promptAccount: "Optional: the SenseNova username used to read the console's credit quota (blank reads the credentials snquota already stored)",
   promptPassword: "Optional: the account password (stored in plaintext in this machine's plugin-auth.json, used only to read quota)",
   placeholderAccount: "username",
   placeholderPassword: "blank = do not store a password",

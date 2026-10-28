@@ -102,7 +102,8 @@ export function consoleAuthOf(auth) {
   };
   return {
     // The sign-in prompt stores this under `email`, which is the key Magpie
-    // reads when naming the account; older sign-ins used `username`.
+    // reads when naming the account, even though the value is a username.
+    // Older sign-ins used `username`, and a few `account`, so all three are read.
     username: pick("email", "username", "account"),
     password: pick("password"),
     cookie: pick("cookie"),

@@ -175,7 +175,7 @@ test("提示里不能再问 key，宿主的 key 输入框已经问过一次", as
 
   // 没有 authorize 时 Magpie 才把 key 原样保存成 {type:"api", key}。
   assert.equal(plugin.auth.methods[0].authorize, undefined);
-  assert.equal(plugin.auth.methods[0].label, "日日新模型平台账号");
+  assert.equal(plugin.auth.methods[0].label, "商汤日日新 API key");
   assert.equal(plugin.auth.methods[0].placeholder, "sk-…");
 });
 
@@ -183,18 +183,22 @@ test("供应商显示名与账号提示用中文品牌名", async () => {
   const plugin = await SenseNovaPlugin({}, {});
   const cfg = {};
   await plugin.config(cfg);
-  assert.equal(cfg.provider.sensenova.name, "日日新模型平台");
+  assert.equal(cfg.provider.sensenova.name, "商汤日日新");
 
   const zh = await SenseNovaPlugin({}, { locale: "zh" });
   assert.equal(zh.auth.methods[0].prompts[0].placeholder, "用户名");
-  assert.match(zh.auth.methods[0].prompts[0].message, /日日新模型平台/);
+  assert.match(zh.auth.methods[0].prompts[0].message, /商汤日日新/);
 });
 
 test("账号提问的字段名必须是 email，否则账号行只显示 API Key", async () => {
   // Magpie 依次用 accountId、metadata.email、email 给账号命名，而提示的 key
-  // 决定答案落进 metadata 的哪个字段。改回去就退化成「API key …尾4位」。
+  // 决定答案落进 metadata 的哪个字段。字段名叫 email 才能在账号行显示用户名；
+  // 改成 username 值不会丢（consoleAuthOf 两个都读），但账号行会退化成
+  // 「API key …尾4位」。
+  const { consoleAuthOf } = await import("../internal.mjs");
   const plugin = await SenseNovaPlugin({}, {});
   assert.equal(plugin.auth.methods[0].prompts[0].key, "email");
+  assert.equal(consoleAuthOf({ metadata: { email: " ada " } }).username, "ada");
 });
 
 test("两条提示都带本地化后的文案", async () => {
@@ -205,10 +209,10 @@ test("两条提示都带本地化后的文案", async () => {
   assert.match(en.auth.methods[0].prompts[1].message, /Optional/, "英文表应生效");
 });
 
-test("consoleAuthOf 认 email，也兼容旧的 username / account", async () => {
+test("consoleAuthOf 认 email，也兼容旧的 username / account 拼写", async () => {
   const { consoleAuthOf } = await import("../internal.mjs");
   assert.equal(consoleAuthOf({ metadata: { email: "ada@example.com" } }).username, "ada@example.com");
-  // 改名前登录的账号存在 username 下，不能因为改名就丢掉那套控制台凭据。
+  // 改字段名前登录的把值存在 username 下，不能因为改名就丢掉那套控制台凭据。
   assert.equal(consoleAuthOf({ metadata: { username: "旧账号" } }).username, "旧账号");
   assert.equal(consoleAuthOf({ metadata: { account: "别名" } }).username, "别名");
   // email 优先，且去空白

@@ -70,7 +70,7 @@ export function parseJwt(token) {
  * 两个 token 都带它：`access_token.ext.username`，以及 id_token 里那个嵌套的
  * `id_token.id_token.username`（后者还带 user_avatar / user_id / login_type）。
  * 实测两者取到的值相同。控制台头部显示的就是这个名字，所以它才是用户认得的
- * 那个标识 —— 而登录时填的账号可能是手机号或邮箱，是另一回事。
+ * 那个标识 —— 而登录时填的账号是另一回事。
  *
  * 在这里读的好处是：**只填了 API Key、没填账号密码的情况下也能拿到名字**，
  * 于是账号行不必退化成显示 API Key 后缀。
