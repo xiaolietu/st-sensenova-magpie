@@ -484,22 +484,47 @@ still points at that address, for the discovery card once this is published to n
 
 ## Models
 
-The four ids in the built-in snapshot are not invented — they are what the platform's own usage report
-emits (`credit-usage-trend`'s `series[].model_id`):
+The model list comes from the documented `GET /v1/models` endpoint
+([模型列表 (List Models)](https://platform.sensenova.cn/docs)). It answers with `{ data: [ … ] }`, where each
+`Model` object carries everything the provider needs:
 
-- `sensenova-6.8-flash-lite` (multimodal)
-- `deepseek-flash`
-- `glm-5.2`
-- `kimi-k3`
+| Field | Used for |
+|---|---|
+| `id` | The model id sent on the wire — requests use exactly this |
+| `name` | The display name (the platform usually repeats the id) |
+| `context_length` / `max_output_length` | Magpie's `limit.context` / `limit.output` |
+| `input_modalities` / `output_modalities` | `attachment`, and the capability flags |
+| `supported_features` | `tools` / `reasoning` / `json_mode` capability flags |
+| `supported_sampling_parameters` | Whether `temperature` may be sent at all |
+| `pricing.prompt` / `.completion` / `.input_cache_read` | `cost.input` / `cost.output` / `cost.cache.read` |
 
-After sign-in, `provider.models` uses the API key to fetch the live list from `GET /v1/models` (that
-endpoint exists — it answers 401 without a key rather than 404). A live list is used when available;
-otherwise the plugin falls back and marks the list with Magpie's fallback flag. Magpie also merges its
-own models.dev entry for `sensenova`, which in practice adds `deepseek-v4-pro` and `deepseek-v4-flash`,
-two 1M-context models.
+Two details are easy to get wrong, and both were: the platform spells the output ceiling
+`max_output_length` (not `max_completion_tokens`), and capabilities arrive as **members of a
+`supported_features` array** rather than as per-feature booleans. Reading the OpenAI spellings yields
+nothing, which silently left the provider serving its built-in snapshot forever.
 
-Context length and output ceiling are not published anywhere in the platform's public documentation, so
-the built-in snapshot uses conservative placeholders; a live list that carries metadata overrides them.
+The list is cached per API key for six hours, so switching accounts cannot reuse the previous account's
+models. When a fetch fails, the plugin serves what it already knew and marks the list with Magpie's
+fallback flag.
+
+### Chat models and image models
+
+`/v1/models` also lists the two image-creation models — `sensenova-u1.5-lite` and `sensenova-u1.5-fast` —
+whose `output_modalities` is `["image"]` and whose endpoint is `/v1/images/generations`. This provider
+speaks `chat/completions` only, so those entries are filtered out rather than advertised and left to fail
+at request time. Everything with `text` in `output_modalities` is kept.
+
+The built-in snapshot therefore holds the five chat models, and is only used before the first sign-in or
+when a fetch fails:
+
+- `sensenova-6.8-flash-lite` — multimodal, 262144 context / 65536 output (the documented example)
+- `deepseek-v4-flash`
+- `deepseek-flash` (DeepSeek V4.1 Flash)
+- `glm-5.2` — 1M context
+- `kimi-k3` — 1M context
+
+Magpie also merges its own models.dev entry for `sensenova`, which can add ids the account does not
+actually have; the live list is the authority for what this plugin offers.
 
 ---
 
@@ -583,13 +608,16 @@ are opt-in and not done.
 node --test test/*.test.mjs
 ```
 
-55 tests cover: mapping pools to windows (including the `used` percentage, `amount`, `limit`, `span`,
+73 tests cover: mapping pools to windows (including the `used` percentage, `amount`, `limit`, `span`,
 `resetsAt`, the dedicated pool's model scoping, and the granted balance); that `limit - amount`
 reproduces the console balance; that a window with an unknown usage is skipped rather than reported as
 zero; degradation when fields are missing; JWT expiry; refresh-token renewal; the error raised when
 there are no credentials; the `fetch` hook preserving the body and headers for both `(url, init)` and
-`Request` inputs; that internal `__`-prefixed keys never reach the credentials file; both envelopes for
-model normalization; locale resolution (explicit, OS, environment, and POSIX `C`); that the two string
+`Request` inputs; that internal `__`-prefixed keys never reach the credentials file; the documented
+`/v1/models` shape end to end (that `max_output_length` and not `max_completion_tokens` carries the output
+ceiling, that `supported_features` membership drives the capability flags, that pricing strings become
+numbers, that image-creation entries are filtered out, and that the catalog caches per key and keeps the
+last good list when a fetch fails); locale resolution (explicit, OS, environment, and POSIX `C`); that the two string
 tables stay in step; that the shared pool is not run through the dedicated-pool naming rule; that
 `accountNameOf` reads the token and yields nothing rather than inventing a name; that the account prompt is
 declared under the `email` key and that `consoleAuthOf` still reads the older `username`/`account`

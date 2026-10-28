@@ -2,14 +2,18 @@
  * Model discovery for SenseNova Token Plan.
  *
  * The Token Plan speaks the OpenAI dialect at `https://token.sensenova.cn/v1`,
- * and its `GET /models` endpoint does answer (401 without a key, not 404), so
- * the live list is the source of truth once an account exists.
+ * and `GET /v1/models` is a documented endpoint — it returns `{ data: [ … ] }`
+ * with the id, modalities, context window, pricing and capability flags for
+ * every model the account can use. That live list is the source of truth.
  *
- * The built-in snapshot below is what keeps the provider selectable before the
- * first sign-in and when the fetch fails. Its model ids are the ones the
- * platform's own usage report actually emits — read from
- * `credit-usage-trend`'s `series[].model_id` — rather than the marketing names
- * in the announcement, which do not match what goes on the wire.
+ * Field names below follow the platform's own `Model` object, not OpenAI's:
+ * `context_length` / `max_output_length` (not `max_completion_tokens`), and
+ * capability flags arrive as members of `supported_features` rather than as
+ * booleans. Reading the OpenAI spellings silently produced nothing, which is
+ * how the plugin previously ended up serving its built-in snapshot forever.
+ *
+ * The snapshot in `FALLBACK_MODELS` only keeps the provider selectable before
+ * the first sign-in and when a fetch fails.
  *
  * @module st-sensenova-magpie/models
  */
@@ -28,29 +32,34 @@ export const DEFAULT_REFRESH_HOURS = 6;
 
 const DEFAULT_CONTEXT = 131072;
 const DEFAULT_OUTPUT = 32768;
+const ONE_MILLION = 1048576;
 
 /**
- * The models to declare before any network call.
+ * The chat models to declare before any network call.
  *
- * Capability fields are conservative placeholders: the live `/models` response
- * replaces them when it carries metadata, and the platform does not document
- * per-model context or output ceilings publicly. Only the ids and the
- * multimodal flag on Flash-Lite are taken from observed platform behaviour.
+ * Taken from the platform's 模型总览. The two image-creation models
+ * (`sensenova-u1.5-lite`, `sensenova-u1.5-fast`) are deliberately absent: they
+ * are served by `/v1/images/generations`, not `/v1/chat/completions`, so
+ * offering them to a chat provider would only produce failing requests.
+ *
+ * `sensenova-6.8-flash-lite` carries the context and output ceilings the
+ * documented `/v1/models` example publishes; the rest are conservative
+ * placeholders that the live list replaces.
  */
 export const FALLBACK_MODELS = [
   {
     id: "sensenova-6.8-flash-lite",
     name: "SenseNova 6.8 Flash Lite",
-    contextLength: DEFAULT_CONTEXT,
-    maxCompletionTokens: DEFAULT_OUTPUT,
+    contextLength: 262144,
+    maxCompletionTokens: 65536,
     inputModalities: ["text", "image"],
     outputModalities: ["text"],
     supportsTools: true,
     reasoning: true,
   },
   {
-    id: "deepseek-flash",
-    name: "DeepSeek Flash",
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
     contextLength: DEFAULT_CONTEXT,
     maxCompletionTokens: DEFAULT_OUTPUT,
     inputModalities: ["text"],
@@ -59,9 +68,19 @@ export const FALLBACK_MODELS = [
     reasoning: true,
   },
   {
-    id: "glm-5.2",
-    name: "GLM 5.2",
+    id: "deepseek-flash",
+    name: "DeepSeek V4.1 Flash",
     contextLength: DEFAULT_CONTEXT,
+    maxCompletionTokens: DEFAULT_OUTPUT,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportsTools: true,
+    reasoning: true,
+  },
+  {
+    id: "glm-5.2",
+    name: "GLM-5.2",
+    contextLength: ONE_MILLION,
     maxCompletionTokens: DEFAULT_OUTPUT,
     inputModalities: ["text"],
     outputModalities: ["text"],
@@ -71,9 +90,9 @@ export const FALLBACK_MODELS = [
   {
     id: "kimi-k3",
     name: "Kimi K3",
-    contextLength: DEFAULT_CONTEXT,
+    contextLength: ONE_MILLION,
     maxCompletionTokens: DEFAULT_OUTPUT,
-    inputModalities: ["text"],
+    inputModalities: ["text", "image"],
     outputModalities: ["text"],
     supportsTools: true,
     reasoning: true,
@@ -83,13 +102,14 @@ export const FALLBACK_MODELS = [
 const positive = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
 const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : undefined);
+/** Pricing arrives as strings ("0"); anything unusable counts as free. */
+const price = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 
 /**
- * Normalize one raw model entry from any of the shapes the endpoint may use.
- *
- * The response format is not documented, so both OpenAI's `{data:[…]}` and a
- * bare array are accepted, and capability fields are read under either the
- * snake_case or camelCase spelling.
+ * Normalize one `Model` object from `GET /v1/models`.
  *
  * @param {object} raw - one entry from the endpoint.
  * @returns {object|null} a normalized model, or null when it has no id.
@@ -98,25 +118,40 @@ export function normalizeModel(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = text(raw.id) ?? text(raw.model_id) ?? text(raw.model);
   if (!id) return null;
+
   const fallback = FALLBACK_MODELS.find((m) => m.id === id);
+  const features = list(raw.supported_features ?? raw.supportedFeatures);
+  const sampling = list(raw.supported_sampling_parameters ?? raw.supportedSamplingParameters);
+  const pricing = raw.pricing && typeof raw.pricing === "object" ? raw.pricing : undefined;
+
   return {
     id,
     name: text(raw.name) ?? text(raw.model_name) ?? fallback?.name ?? id,
+    description: text(raw.description),
     contextLength:
-      positive(raw.context_length ?? raw.contextLength ?? raw.max_context_tokens) ??
+      positive(raw.context_length ?? raw.contextLength) ??
       fallback?.contextLength ??
       DEFAULT_CONTEXT,
     maxCompletionTokens:
-      positive(raw.max_completion_tokens ?? raw.maxCompletionTokens ?? raw.max_output_tokens) ??
+      positive(raw.max_output_length ?? raw.maxOutputLength ?? raw.max_output_tokens) ??
       fallback?.maxCompletionTokens ??
       DEFAULT_OUTPUT,
-    inputModalities:
-      list(raw.input_modalities ?? raw.inputModalities) ?? fallback?.inputModalities ?? ["text"],
-    outputModalities:
-      list(raw.output_modalities ?? raw.outputModalities) ?? fallback?.outputModalities ?? ["text"],
-    supportsTools:
-      raw.supports_tools ?? raw.supportsTools ?? raw.tool_call ?? fallback?.supportsTools ?? true,
-    reasoning: raw.reasoning ?? raw.supports_reasoning ?? fallback?.reasoning ?? true,
+    inputModalities: list(raw.input_modalities) ?? fallback?.inputModalities ?? ["text"],
+    outputModalities: list(raw.output_modalities) ?? fallback?.outputModalities ?? ["text"],
+    // The platform reports capabilities as a list of feature names rather than
+    // as per-feature booleans, so membership is the only reliable signal.
+    supportsTools: features ? features.includes("tools") : (fallback?.supportsTools ?? true),
+    reasoning: features ? features.includes("reasoning") : (fallback?.reasoning ?? true),
+    supportsJsonMode: features ? features.includes("json_mode") : undefined,
+    // Sampling support decides whether the host may send `temperature` at all.
+    supportsTemperature: sampling ? sampling.includes("temperature") : true,
+    cost: pricing
+      ? {
+          input: price(pricing.prompt),
+          output: price(pricing.completion),
+          cacheRead: price(pricing.input_cache_read),
+        }
+      : undefined,
   };
 }
 
@@ -133,7 +168,23 @@ export function extractModels(payload) {
 }
 
 /**
- * A catalog that fetches once, caches, and never throws.
+ * Whether a model can serve a chat completion.
+ *
+ * `/v1/models` also lists the image-creation models, whose output modality is
+ * `image` and whose endpoint is `/v1/images/generations`. This provider only
+ * speaks `chat/completions`, so those are dropped rather than advertised and
+ * left to fail at request time.
+ */
+export function isChatModel(model) {
+  const output = list(model?.outputModalities) ?? ["text"];
+  return output.includes("text");
+}
+
+/**
+ * A catalog that fetches once per key and caches the result.
+ *
+ * A failed fetch throws, so the caller can mark what it serves as remembered
+ * rather than live; `peek()` keeps returning the last good list throughout.
  *
  * @param {{baseURL?: string, timeoutMs?: number, refreshHours?: number, fetchImpl?: Function}} [opts]
  */
@@ -143,21 +194,24 @@ export function createCatalog(opts = {}) {
   const refreshMs = (opts.refreshHours ?? DEFAULT_REFRESH_HOURS) * 3600_000;
   const doFetch = opts.fetchImpl ?? fetch;
 
-  let cached = null;
-  let fetchedAt = 0;
-  let inflight = null;
+  /** Per-key cache: switching accounts must not reuse the previous list. */
+  const cache = new Map();
+  const inflight = new Map();
+  let last = null;
 
   /** The last successful list, or null. Never blocks. */
-  const peek = () => cached;
+  const peek = () => last;
 
-  /** Fetch the list, at most once per refresh window. */
+  /** Fetch the list, at most once per key per refresh window. */
   const load = async (apiKey) => {
-    const fresh = cached && Date.now() - fetchedAt < refreshMs;
-    if (fresh) return cached;
-    if (inflight) return inflight;
-    if (!apiKey) return cached ?? [];
+    if (!apiKey) return last ?? [];
 
-    inflight = (async () => {
+    const hit = cache.get(apiKey);
+    if (hit && Date.now() - hit.at < refreshMs) return hit.models;
+    const running = inflight.get(apiKey);
+    if (running) return running;
+
+    const task = (async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -166,19 +220,20 @@ export function createCatalog(opts = {}) {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const models = extractModels(await res.json());
+        const models = extractModels(await res.json()).filter(isChatModel);
         if (models.length) {
-          cached = models;
-          fetchedAt = Date.now();
+          cache.set(apiKey, { models, at: Date.now() });
+          last = models;
         }
-        return models.length ? models : cached ?? [];
+        return models.length ? models : (hit?.models ?? last ?? []);
       } finally {
         clearTimeout(timer);
-        inflight = null;
+        inflight.delete(apiKey);
       }
     })();
 
-    return inflight;
+    inflight.set(apiKey, task);
+    return task;
   };
 
   return { peek, load, baseURL };
@@ -223,10 +278,14 @@ export function toProviderModel(m, providerID, { baseURL = DEFAULT_BASE_URL, npm
     status: "active",
     headers: {},
     options: {},
-    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    cost: {
+      input: m.cost?.input ?? 0,
+      output: m.cost?.output ?? 0,
+      cache: { read: m.cost?.cacheRead ?? 0, write: 0 },
+    },
     limit: { context: m.contextLength, output: m.maxCompletionTokens },
     capabilities: {
-      temperature: true,
+      temperature: m.supportsTemperature !== false,
       reasoning: m.reasoning === true,
       attachment: hasNonTextInput(m),
       toolcall: m.supportsTools === true,
