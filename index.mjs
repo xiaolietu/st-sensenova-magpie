@@ -25,7 +25,7 @@
  * @module st-sensenova-magpie
  */
 
-import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, normalizeKey, readAuth } from "./internal.mjs";
+import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, readAuth } from "./internal.mjs";
 import { DEFAULT_BASE_URL, NPM, createCatalog, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
@@ -255,21 +255,26 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       /**
        * One method: an API key, plus the console account that can read quota.
        *
-       * The console fields are optional and only asked for once, at sign-in,
-       * because the quota endpoint has no API-key path. Leaving them blank
-       * falls back to whatever `snquota` already stored on this machine.
+       * The key is **not** asked for here. Magpie gives an `api` method its own
+       * key field, titled by `label`, and saves that value as `{type: "api",
+       * key}` when the method has no `authorize` — a prompt for the key would
+       * ask the same question a second time, which is exactly what it used to
+       * do. The prompts below are only the extra questions, asked before
+       * signing in; their answers land in `metadata`.
+       *
+       * The console fields are optional and only asked for once, because the
+       * quota endpoint has no API-key path. Leaving them blank falls back to
+       * whatever `snquota` already stored on this machine.
+       *
+       * A pasted `Bearer …` prefix is stripped at request time by `apiKeyOf`,
+       * so the stored value does not have to be cleaned up here.
        */
       methods: [
         {
           type: "api",
           label: "SenseNova API key",
+          placeholder: "sk-…",
           prompts: [
-            {
-              type: "text",
-              key: "key",
-              message: t.promptKey,
-              placeholder: "sk-…",
-            },
             {
               type: "text",
               // `email` rather than `username`: Magpie names an account from
@@ -289,23 +294,6 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
               placeholder: t.placeholderPassword,
             },
           ],
-          async authorize(inputs) {
-            const key = normalizeKey(inputs?.key);
-            if (!key) {
-              throw new Error(t.keyRequired);
-            }
-            /**
-             * Nothing to name the account with here beyond the key.
-             *
-             * The account field is prompted under the key `email`, so its answer
-             * reaches Magpie's naming rule through `metadata.email` on its own —
-             * measured. Returning `accountId` or a `metadata` object from here
-             * does not help: `accountId` is documented for oauth results and was
-             * observed to do nothing for an api-type method, and a returned
-             * `metadata` is replaced by the prompt answers before it is stored.
-             */
-            return { type: "success", key };
-          },
         },
       ],
     },

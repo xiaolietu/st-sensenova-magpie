@@ -165,35 +165,33 @@ test("两者都没有时不设 user，交给 Magpie 退回显示 API Key", async
   assert.equal("user" in usage, false);
 });
 
-test("账号提问的 key 必须是 email，否则账号行只显示 API Key", async () => {
-  // Magpie 依次用 accountId、metadata.email、email 给账号命名，而提示的 key
-  // 决定答案落进 metadata 的哪个字段。实测：api 类型下 authorize 返回的
-  // accountId 与 metadata 都不起作用（前者被忽略，后者被提示答案覆盖），
-  // 只有把提示字段命名为 email 才真的改到账号行；改回去就退化成「API key …尾4位」。
+test("提示里不能再问 key，宿主的 key 输入框已经问过一次", async () => {
+  // Magpie 给 api 方式自带一个 key 输入框（标题由 label 决定）。之前插件又
+  // 自己加了一条 key 提示，结果是登录时同一把 key 被问两遍。
   const plugin = await SenseNovaPlugin({}, {});
-  assert.deepEqual(
-    plugin.auth.methods[0].prompts.map((p) => p.key),
-    ["key", "email", "password"]
-  );
+  const keys = plugin.auth.methods[0].prompts.map((p) => p.key);
+  assert.deepEqual(keys, ["email", "password"]);
+  assert.equal(keys.includes("key"), false);
+
+  // 没有 authorize 时 Magpie 才把 key 原样保存成 {type:"api", key}。
+  assert.equal(plugin.auth.methods[0].authorize, undefined);
+  assert.equal(plugin.auth.methods[0].label, "SenseNova API key");
+  assert.equal(plugin.auth.methods[0].placeholder, "sk-…");
 });
 
-test("三条提示都带本地化后的文案", async () => {
+test("账号提问的字段名必须是 email，否则账号行只显示 API Key", async () => {
+  // Magpie 依次用 accountId、metadata.email、email 给账号命名，而提示的 key
+  // 决定答案落进 metadata 的哪个字段。改回去就退化成「API key …尾4位」。
+  const plugin = await SenseNovaPlugin({}, {});
+  assert.equal(plugin.auth.methods[0].prompts[0].key, "email");
+});
+
+test("两条提示都带本地化后的文案", async () => {
   const en = await SenseNovaPlugin({}, { locale: "en" });
   for (const p of en.auth.methods[0].prompts) {
     assert.ok(typeof p.message === "string" && p.message.length > 0, `${p.key} 缺 message`);
   }
   assert.match(en.auth.methods[0].prompts[1].message, /Optional/, "英文表应生效");
-});
-
-test("authorize 只回 {type, key}，命名交给提示字段", async () => {
-  const plugin = await SenseNovaPlugin({}, {});
-  const out = await plugin.auth.methods[0].authorize({ key: "sk-test", email: "13800000000" });
-  assert.deepEqual(out, { type: "success", key: "sk-test" });
-});
-
-test("authorize 仍然拒绝空 key", async () => {
-  const plugin = await SenseNovaPlugin({}, {});
-  await assert.rejects(() => plugin.auth.methods[0].authorize({ key: "  " }), /API Key|API key/);
 });
 
 test("consoleAuthOf 认 email，也兼容旧的 username / account", async () => {

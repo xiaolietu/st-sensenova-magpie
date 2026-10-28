@@ -57,13 +57,17 @@ magpie plugin add <本仓库路径>
 magpie plugin login sensenova
 ```
 
-登录会问三项：
+登录会问三项，但 **API Key 只问一次**：
 
-1. **SenseNova API Key**（必填）—— 控制台 → API-Key 管理。没有它供应商发不出任何请求。
-2. **账号**（可选）—— 用来读取控制台积分额度。
-3. **密码**（可选）—— 同上。
+| 顺序 | 提问 | 必填 | 来源 |
+| --- | --- | --- | --- |
+| 1 | SenseNova 账号（手机号 / 邮箱） | 否 | 插件提问 |
+| 2 | 账号密码 | 否 | 插件提问 |
+| 3 | **SenseNova API Key** | **是** | Magpie 自己的 key 输入框（标题取自方法的 `label`） |
 
-后两项留空没问题：插件会回退去读 `~/.sensenova-quota.json`，那是 `snquota` 命令行在本机写下的文件。
+第 3 项由宿主提供，插件不再重复问一遍 —— 早期版本额外声明了一条 key 提示，导致同一把 key 要输入两次，已移除。没有 Key 供应商发不出任何请求。
+
+账号和密码留空没问题：插件会回退去读 `~/.sensenova-quota.json`，那是 `snquota` 命令行在本机写下的文件。
 
 **登录之后才会有模型可选** —— 插件不内置模型清单，模型是登录后从 `GET /v1/models` 实时拉取的（见第四节）。
 
@@ -77,10 +81,10 @@ magpie: read /dev/stdin: The handle is invalid.
 
 这是 Magpie 宿主代码在读标准输入，不是本插件的问题 —— 任何用文本提示的包都一样。两种绕法：
 
-**改用管道输入。** 答案按提示顺序读取（Key → 账号 → 密码），**末尾要多给一行**，否则读到最后一项前就遇到 EOF：
+**改用管道输入。** 答案按提问顺序读取（账号 → 密码 → API Key），**末尾要多给一行**，否则读到最后一项前就遇到 EOF：
 
 ```bash
-printf '%s\n%s\n%s\n.\n' "$SENSENOVA_API_KEY" "$ACCOUNT" "$PASSWORD" | magpie plugin login sensenova
+printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie plugin login sensenova
 ```
 
 **或者直接用 Magpie 应用内的登录界面**，它不经过命令行的读取器。
@@ -381,12 +385,14 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 
 所以这个标签是**在登录那一刻**定下来的，取决于你填了什么：填了账号字段，行上就显示那个手机号或邮箱；留空就保持 Magpie 的 API Key 兜底命名。
 
-要让一个 `api` 类型的方法设上这个名字，试过几种办法，有两个看似可行的其实不行：
+要让一个 `api` 类型的方法设上这个名字，实测下来只有一条路走得通：
 
 - **提示项的 `key` 才是决定因素。** 本插件把账号问在 `email` 这个 key 下，答案就落进 `metadata.email` —— Magpie 读的正是这个字段。实测：账号字段填 `139…7777` 的一次登录，账号行显示的正是这个值。
-- **`authorize` 返回的 `accountId` 被忽略**（`api` 类型）。它只对 oauth 结果有文档说明，带着它登录仍然显示 `API key`。
-- **`authorize` 返回的 `metadata` 会被丢弃**，Magpie 用提示收集到的答案覆盖它，塞进去的 `email` 活不下来。
+- **`accountId` 靠不住**（`api` 类型）。它只对 oauth 结果有文档说明，带着它登录仍然显示 `API key`。
+- **`metadata` 不能由代码塞**，Magpie 用提示收集到的答案覆盖它，塞进去的 `email` 活不下来。
 - **`usage.user` 也不会改名。** 钩子返回的 `user` 存在 Magpie 的额度缓存里（`quotas.json` → `quota.user`），账号行和 `magpie quota` 仍然渲染登录时的标签；缓存键始终是 `sensenova/api key …hohj`。
+
+所以本插件不声明 `authorize` —— 它对命名没有任何帮助，只用来校验 key 而宿主已经负责收集。提示项的字段名才是唯一的开关。
 
 更早的登录把账号存在 `metadata.username` 下，所以 `consoleAuthOf` 仍会读这个拼写（以及 `account`）作为回退；只有新的登录能享受到命名改进。
 
@@ -464,7 +470,7 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 node --test test/*.test.mjs
 ```
 
-当前 81 个测试，覆盖：
+当前 80 个测试，覆盖：
 
 - 积分池到窗口的映射（`used` 百分比、`amount`、`limit`、`span`、`resetsAt`、专属池的模型圈定、赠送余额）；
 - `limit - amount` 能复现控制台的余额；
@@ -475,7 +481,8 @@ node --test test/*.test.mjs
 - 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
 - 模块不携带任何内置模型清单（`FALLBACK_MODELS` 必须不存在）；
 - 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
-- 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 authorize → token → 额度）；
+- 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；
+- 登录方法只声明 `email` 与 `password` 两条提示，不含 `key`，也不声明 `authorize`（key 由宿主自己的输入框收集）；
 - 语言解析（显式指定、系统、环境变量、POSIX `C`）；两张字符串表保持同步；
 - 共享池不被套用专属池的命名规则；
 - `accountNameOf` 从令牌读取、取不到时返回空而不是编一个名字；
