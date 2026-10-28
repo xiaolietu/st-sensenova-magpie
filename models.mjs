@@ -11,7 +11,7 @@
  * `credit-usage-trend`'s `series[].model_id` — rather than the marketing names
  * in the announcement, which do not match what goes on the wire.
  *
- * @module magpie-sensenova/models
+ * @module st-sensenova-magpie/models
  */
 
 /** The AI SDK package that speaks the OpenAI-compatible dialect. */

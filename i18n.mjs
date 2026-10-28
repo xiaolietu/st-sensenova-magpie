@@ -12,7 +12,7 @@
  * The console's English site shows "General Pool" and "Flash-Lite Dedicated
  * Pool", so that translation happens in its frontend, not on the wire.
  *
- * @module magpie-sensenova/i18n
+ * @module st-sensenova-magpie/i18n
  */
 
 /** The languages with a string table here. */

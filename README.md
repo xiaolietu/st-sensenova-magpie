@@ -1,4 +1,8 @@
-# magpie-sensenova
+# st-sensenova-magpie
+
+> Independent fork of [aqiu817/magpie-sensenova](https://github.com/aqiu817/magpie-sensenova).
+> MIT licensed; the original copyright notice is retained in [LICENSE](LICENSE).
+> Maintained independently — this repository does not track upstream.
 
 A [Magpie](https://usemagpie.ai) provider plugin for **SenseNova** (商量 / 日日新, SenseTime):
 it brings the Token Plan models in over the OpenAI-compatible API, and reports the console's
@@ -389,7 +393,7 @@ The `options` for this entry in `plugins.json`:
 
 ```json
 {
-  "spec": "…/magpie-sensenova",
+  "spec": "…/st-sensenova-magpie",
   "options": {
     "baseURL": "https://token.sensenova.cn/v1",
     "quotaTtlMs": 60000,
@@ -567,7 +571,7 @@ someone else's repository, which is why it is not done here by default.
 The list is fetched at most every six hours, and Magpie ships a built-in copy as a fallback.
 `MAGPIE_PLUGIN_MARKET=<url>` swaps in another list (`off` means use only the built-in copy).
 
-The `repository` / `homepage` / `bugs` fields in `package.json` point at `aqiu817/magpie-sensenova`, and the
+The `repository` / `homepage` / `bugs` fields in `package.json` point at `xiaolietu/st-sensenova-magpie`, and the
 repository carries the `magpie-plugin` topic, so it is discoverable through route 1 today. Routes 2 and 3
 are opt-in and not done.
 

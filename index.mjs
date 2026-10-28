@@ -22,7 +22,7 @@
  * also loads under OpenCode, which refuses an entry exporting any non-function
  * value. Helpers live in `internal.mjs`, `quota.mjs` and `models.mjs`.
  *
- * @module magpie-sensenova
+ * @module st-sensenova-magpie
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, normalizeKey, readAuth } from "./internal.mjs";

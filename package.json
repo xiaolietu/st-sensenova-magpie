@@ -1,5 +1,5 @@
 {
-  "name": "magpie-sensenova",
+  "name": "st-sensenova-magpie",
   "version": "0.1.0",
   "description": "Magpie provider plugin for SenseNova (商量/日日新): Token Plan models over the OpenAI-compatible API, plus the console's 积分额度 reported as native Magpie quota windows",
   "type": "module",
@@ -33,11 +33,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aqiu817/magpie-sensenova.git"
+    "url": "git+https://github.com/xiaolietu/st-sensenova-magpie.git"
   },
-  "homepage": "https://github.com/aqiu817/magpie-sensenova#readme",
+  "homepage": "https://github.com/xiaolietu/st-sensenova-magpie#readme",
   "bugs": {
-    "url": "https://github.com/aqiu817/magpie-sensenova/issues"
+    "url": "https://github.com/xiaolietu/st-sensenova-magpie/issues"
   },
   "engines": {
     "node": ">=20"

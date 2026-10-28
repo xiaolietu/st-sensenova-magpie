@@ -5,7 +5,7 @@
  * refuses a plugin module whose entry exports any non-function value. See that
  * file's header.
  *
- * @module magpie-sensenova/internal
+ * @module st-sensenova-magpie/internal
  */
 
 import { readFileSync } from "node:fs";
