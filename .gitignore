@@ -1,3 +1,14 @@
 node_modules/
 *.log
 .DS_Store
+
+# Scratch scripts written while checking the live API. They hold a real key in
+# their own copy or fetch one at runtime, so they must never be committed.
+.probe*.mjs
+.live-*.mjs
+.smoke.mjs
+.dump-*.mjs
+.tabbit-task.js
+
+# `npm pack` output
+*.tgz
