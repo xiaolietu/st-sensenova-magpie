@@ -85,6 +85,18 @@ test("a model with no feature list keeps the snapshot's guess", () => {
   assert.equal(m.reasoning, true);
 });
 
+test("an empty feature list means nothing declared, not nothing supported", () => {
+  // The platform lists image-creation models with `[]`, and a chat model whose
+  // metadata is not filled in yet would otherwise lose tools and reasoning.
+  const m = normalizeModel({ id: "glm-5.2", supported_features: [] });
+  assert.equal(m.supportsTools, true);
+  assert.equal(m.reasoning, true);
+
+  const unknown = normalizeModel({ id: "brand-new-model", supported_features: [] });
+  assert.equal(unknown.supportsTools, true);
+  assert.equal(unknown.reasoning, true);
+});
+
 test("sampling support decides whether temperature may be sent", () => {
   assert.equal(normalizeModel(DOCUMENTED).supportsTemperature, true);
   const noTemp = normalizeModel({ id: "x", supported_sampling_parameters: ["stop"] });
@@ -213,6 +225,35 @@ test("a failed fetch throws so the caller can mark the list as remembered", asyn
   await assert.rejects(() => catalog.load("sk-b"), /HTTP 500/);
   // The good list is still there for the caller to fall back to.
   assert.equal(catalog.peek()[0].id, "sensenova-6.8-flash-lite");
+});
+
+test("a fetchImpl that throws synchronously does not poison the key", async () => {
+  // The throw settles the async body before the in-flight entry is stored, so
+  // cleanup must hang off the promise or the rejected task stays cached and
+  // every later load replays it without retrying.
+  let calls = 0;
+  const catalog = createCatalog({
+    fetchImpl: () => {
+      calls += 1;
+      throw new Error("sync boom");
+    },
+  });
+  await assert.rejects(() => catalog.load("sk-a"), /sync boom/);
+  await assert.rejects(() => catalog.load("sk-a"), /sync boom/);
+  assert.equal(calls, 2);
+});
+
+test("concurrent loads of one key share a single request", async () => {
+  let calls = 0;
+  const catalog = createCatalog({
+    fetchImpl: async () => {
+      calls += 1;
+      return { ok: true, json: async () => ({ data: [DOCUMENTED] }) };
+    },
+  });
+  const [a, b] = await Promise.all([catalog.load("sk-a"), catalog.load("sk-a")]);
+  assert.equal(calls, 1);
+  assert.equal(a[0].id, b[0].id);
 });
 
 /* --------------------------------------------------- Magpie object shapes */

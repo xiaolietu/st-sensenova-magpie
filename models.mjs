@@ -121,6 +121,12 @@ export function normalizeModel(raw) {
 
   const fallback = FALLBACK_MODELS.find((m) => m.id === id);
   const features = list(raw.supported_features ?? raw.supportedFeatures);
+  // An empty array means "nothing declared", not "supports nothing": the
+  // platform lists image-creation models with `[]`, and a chat model whose
+  // metadata has not been filled in yet would otherwise be reported as having
+  // no tools and no reasoning, silently degrading every agent that uses it.
+  // Only a non-empty list is treated as an authoritative capability set.
+  const declaresFeatures = Array.isArray(features) && features.length > 0;
   const sampling = list(raw.supported_sampling_parameters ?? raw.supportedSamplingParameters);
   const pricing = raw.pricing && typeof raw.pricing === "object" ? raw.pricing : undefined;
 
@@ -140,9 +146,13 @@ export function normalizeModel(raw) {
     outputModalities: list(raw.output_modalities) ?? fallback?.outputModalities ?? ["text"],
     // The platform reports capabilities as a list of feature names rather than
     // as per-feature booleans, so membership is the only reliable signal.
-    supportsTools: features ? features.includes("tools") : (fallback?.supportsTools ?? true),
-    reasoning: features ? features.includes("reasoning") : (fallback?.reasoning ?? true),
-    supportsJsonMode: features ? features.includes("json_mode") : undefined,
+    supportsTools: declaresFeatures
+      ? features.includes("tools")
+      : (fallback?.supportsTools ?? true),
+    reasoning: declaresFeatures
+      ? features.includes("reasoning")
+      : (fallback?.reasoning ?? true),
+    supportsJsonMode: declaresFeatures ? features.includes("json_mode") : undefined,
     // Sampling support decides whether the host may send `temperature` at all.
     supportsTemperature: sampling ? sampling.includes("temperature") : true,
     cost: pricing
@@ -228,9 +238,15 @@ export function createCatalog(opts = {}) {
         return models.length ? models : (hit?.models ?? last ?? []);
       } finally {
         clearTimeout(timer);
-        inflight.delete(apiKey);
       }
-    })();
+    })().finally(() => {
+      // Attached to the promise rather than placed in the async body: a
+      // `fetchImpl` that throws synchronously settles the body before
+      // `inflight.set` below runs, so an in-body cleanup would delete the key
+      // first and leave the rejected promise cached forever — every later load
+      // for that key would replay the same failure without retrying.
+      inflight.delete(apiKey);
+    });
 
     inflight.set(apiKey, task);
     return task;

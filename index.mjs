@@ -26,7 +26,7 @@
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, normalizeKey, readAuth } from "./internal.mjs";
-import { FALLBACK_MODELS, NPM, createCatalog, toConfigModel, toProviderModel } from "./models.mjs";
+import { FALLBACK_MODELS, DEFAULT_BASE_URL, NPM, createCatalog, toConfigModel, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -157,7 +157,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       cfg.provider[PROVIDER] = {
         name: "SenseNova",
         npm: NPM,
-        api: opts.baseURL ?? "https://token.sensenova.cn/v1",
+        api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
         models: { ...modelsAsConfig(seedModels()), ...(was.models ?? {}) },
       };
@@ -205,7 +205,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       async loader(getAuth) {
         const key = apiKeyOf(await readAuth(getAuth));
         return {
-          baseURL: opts.baseURL ?? "https://token.sensenova.cn/v1",
+          baseURL: opts.baseURL ?? DEFAULT_BASE_URL,
           apiKey: key,
           async fetch(input, init) {
             // Re-read per request so a sign-in that changes mid-session is

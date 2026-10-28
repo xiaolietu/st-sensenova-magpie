@@ -457,7 +457,7 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 node --test test/*.test.mjs
 ```
 
-当前 73 个测试，覆盖：
+当前 80 个测试，覆盖：
 
 - 积分池到窗口的映射（`used` 百分比、`amount`、`limit`、`span`、`resetsAt`、专属池的模型圈定、赠送余额）；
 - `limit - amount` 能复现控制台的余额；
@@ -465,7 +465,9 @@ node --test test/*.test.mjs
 - 字段缺失时的降级；JWT 过期判断；refresh token 续期；无凭据时报出的错误；
 - `fetch` 钩子在 `(url, init)` 与 `Request` 两种入参下都保住 body 和 headers；
 - `__` 前缀的内部键不会写进凭据文件；
-- 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、定价字符串转数字、图像创作条目被过滤、目录按 key 缓存且拉取失败时保留上一份好数据）；
+- 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
+- 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
+- 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 authorize → token → 额度）；
 - 语言解析（显式指定、系统、环境变量、POSIX `C`）；两张字符串表保持同步；
 - 共享池不被套用专属池的命名规则；
 - `accountNameOf` 从令牌读取、取不到时返回空而不是编一个名字；
