@@ -26,7 +26,7 @@
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, normalizeKey, readAuth } from "./internal.mjs";
-import { FALLBACK_MODELS, DEFAULT_BASE_URL, NPM, createCatalog, toConfigModel, toProviderModel } from "./models.mjs";
+import { DEFAULT_BASE_URL, NPM, createCatalog, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -57,10 +57,6 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       /* the host's logger is best-effort */
     }
   };
-
-  const seedModels = () => catalog.peek() ?? FALLBACK_MODELS;
-  const modelsAsConfig = (models) =>
-    Object.fromEntries(models.map((m) => [m.id, toConfigModel(m)]));
 
   /**
    * The credential pair for one account.
@@ -155,7 +151,14 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
   };
 
   return {
-    /** Declare the provider and its models. */
+    /**
+     * Declare the provider.
+     *
+     * No models are declared here. They depend on the account and arrive from
+     * the `models` hook below, which reads `GET /v1/models`; declaring a
+     * built-in list would only be a snapshot that drifts from what the account
+     * is actually entitled to.
+     */
     config: async (cfg) => {
       cfg.provider ??= {};
       const was = cfg.provider[PROVIDER] ?? {};
@@ -164,35 +167,44 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         npm: NPM,
         api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
-        models: { ...modelsAsConfig(seedModels()), ...(was.models ?? {}) },
+        models: {},
       };
     },
 
     provider: {
       id: PROVIDER,
       /**
-       * The models this account can actually use.
+       * The models this account can actually use, straight from `/v1/models`.
        *
-       * Returning the declared list unchanged on failure keeps the provider
-       * usable: Magpie marks it as fallen back rather than letting it vanish.
+       * On failure the last list that was fetched is served and marked with
+       * Magpie's fallback flag, so a transient error does not empty the model
+       * picker. Before the first successful fetch there is nothing to serve and
+       * the provider simply has no models yet.
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
-        const declared = provider?.models ?? modelsAsConfig(seedModels());
-        const key = apiKeyOf(auth);
-        if (!key) return fellBack(declared);
-        try {
-          const live = await catalog.load(key);
-          if (!live.length) return fellBack(declared);
-          return Object.fromEntries(
-            live.map((m) => [
+        const asProvider = (list) =>
+          Object.fromEntries(
+            list.map((m) => [
               m.id,
               toProviderModel(m, id, { baseURL: opts.baseURL ?? catalog.baseURL }),
             ])
           );
+        /** What to serve when the live list is unavailable. */
+        const remembered = () => {
+          const known = catalog.peek();
+          return fellBack(known?.length ? asProvider(known) : (provider?.models ?? {}));
+        };
+
+        const key = apiKeyOf(auth);
+        if (!key) return remembered();
+        try {
+          const live = await catalog.load(key);
+          if (!live.length) return remembered();
+          return asProvider(live);
         } catch (error) {
           log("warn", `sensenova: keeping the known model list: ${error.message}`);
-          return fellBack(declared);
+          return remembered();
         }
       },
     },

@@ -10,7 +10,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  FALLBACK_MODELS,
   createCatalog,
   extractModels,
   isChatModel,
@@ -79,7 +78,7 @@ test("capabilities come from supported_features membership", () => {
   assert.equal(noTools.reasoning, false);
 });
 
-test("a model with no feature list keeps the snapshot's guess", () => {
+test("a model with no feature list is assumed capable", () => {
   const m = normalizeModel({ id: "kimi-k3" });
   assert.equal(m.supportsTools, true);
   assert.equal(m.reasoning, true);
@@ -139,16 +138,11 @@ test("image-creation models are not chat models", () => {
   assert.equal(isChatModel(normalizeModel(IMAGE_MODEL)), false);
 });
 
-test("the snapshot holds only chat models the documentation lists", () => {
-  const ids = FALLBACK_MODELS.map((m) => m.id);
-  assert.ok(ids.includes("sensenova-6.8-flash-lite"));
-  assert.ok(ids.includes("deepseek-v4-flash"));
-  assert.ok(ids.includes("deepseek-flash"));
-  assert.ok(ids.includes("glm-5.2"));
-  assert.ok(ids.includes("kimi-k3"));
-  // Served by /v1/images/generations, so a chat provider must not list them.
-  assert.ok(!ids.includes("sensenova-u1.5-lite"));
-  assert.ok(!ids.includes("sensenova-u1.5-fast"));
+test("the module ships no built-in model list", async () => {
+  // Models must come from GET /v1/models only; a snapshot would drift from
+  // what the account is entitled to.
+  const mod = await import("../models.mjs");
+  assert.equal(mod.FALLBACK_MODELS, undefined);
 });
 
 /* ------------------------------------------------------------- the catalog */
@@ -159,7 +153,7 @@ const respond = (body) => async () => ({
   json: async () => body,
 });
 
-test("a live fetch replaces the snapshot and drops image models", async () => {
+test("a live fetch drops image models", async () => {
   const catalog = createCatalog({ fetchImpl: respond({ data: [DOCUMENTED, IMAGE_MODEL] }) });
   const models = await catalog.load("sk-a");
   assert.equal(models.length, 1);

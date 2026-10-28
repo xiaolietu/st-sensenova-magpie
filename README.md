@@ -65,6 +65,8 @@ magpie plugin login sensenova
 
 后两项留空没问题：插件会回退去读 `~/.sensenova-quota.json`，那是 `snquota` 命令行在本机写下的文件。
 
+**登录之后才会有模型可选** —— 插件不内置模型清单，模型是登录后从 `GET /v1/models` 实时拉取的（见第四节）。
+
 ### Windows 下提示符报错的处理
 
 Magpie 的提示符读取器需要一个真正的 Windows 控制台。在 Git Bash / mintty 这类不提供控制台的 shell 里，第一个提示就会失败：
@@ -142,25 +144,29 @@ magpie plugin options sensenova '{"locale":"en"}'
 | `supported_sampling_parameters` | 决定能不能发 `temperature` |
 | `pricing.prompt` / `.completion` / `.input_cache_read` | 映射为 `cost.input` / `cost.output` / `cost.cache.read` |
 
-**两个容易写错、而且确实写错过的点**：平台把输出上限拼成 `max_output_length`（不是 OpenAI 的 `max_completion_tokens`）；能力是 **`supported_features` 数组的成员**，不是逐项的布尔字段。按 OpenAI 的拼法去读会一无所获，结果就是插件永远只能用它内置的快照。
+**两个容易写错、而且确实写错过的点**：平台把输出上限拼成 `max_output_length`（不是 OpenAI 的 `max_completion_tokens`）；能力是 **`supported_features` 数组的成员**，不是逐项的布尔字段。按 OpenAI 的拼法去读会一无所获。
 
-列表按 **API Key 分桶缓存 6 小时**，所以切换账号不会复用上一个账号的模型列表。拉取失败时，插件继续提供已知的那份，并打上 Magpie 的回退标记。
+列表按 **API Key 分桶缓存 6 小时**，所以切换账号不会复用上一个账号的模型列表。
+
+### 没有任何内置模型清单
+
+**插件不携带任何静态模型列表**，模型完全来自 `GET /v1/models`。`config` 钩子声明供应商时 `models` 是空对象，模型由 `provider.models` 钩子按账号实时填充 —— 账号能用的模型就是列表里的那些，不会出现「插件写着有、账号其实没有」的情况。
+
+三种情形下的行为：
+
+| 情形 | 结果 |
+|---|---|
+| 有 API Key，接口正常 | 直接用接口返回的列表（已过滤图像模型） |
+| 有 API Key，但接口故障 | 返回上一次成功拉到的列表，并打上 Magpie 的回退标记；从未成功过则为空 |
+| 尚未登录 | 没有任何模型，打回退标记 |
+
+所以**登录之前供应商是空的**，这是预期行为 —— 没有 Key 本来就发不出请求。
+
+Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入账号实际没有的模型 id；**以实时列表为准**。
 
 ### 对话模型与图像模型
 
 `/v1/models` 也会列出两个图像创作模型 —— `sensenova-u1.5-lite` 和 `sensenova-u1.5-fast` —— 它们的 `output_modalities` 是 `["image"]`，走的是 `/v1/images/generations`。**本插件只讲 chat completions，所以这两条被过滤掉了**，不会列出来让请求在运行时报错。凡是 `output_modalities` 含 `text` 的都保留。
-
-内置快照因此只含 5 个对话模型，仅在首次登录前或拉取失败时使用：
-
-| 模型 | Model ID | 上下文 / 输出上限 |
-| --- | --- | --- |
-| SenseNova 6.8 Flash Lite | `sensenova-6.8-flash-lite` | 262144 / 65536（文档示例值） |
-| DeepSeek V4 Flash | `deepseek-v4-flash` | 快照占位值 |
-| DeepSeek V4.1 Flash | `deepseek-flash` | 快照占位值 |
-| GLM-5.2 | `glm-5.2` | 1M |
-| Kimi K3 | `kimi-k3` | 1M |
-
-Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入账号实际没有的模型 id；**以实时列表为准**。
 
 > 为什么图像模型不能接：Magpie 的插件体系没有生图通道。它的 npm 到 API 映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions），模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
 
@@ -401,7 +407,8 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
 - 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
-- 没有实时列表时，模型的能力字段（上下文长度等）是占位值。
+- 登录之前供应商没有可选模型；首次拉取失败时同样为空，因为没有内置清单可退。
+- 接口若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入），文档所述的响应形状不会省略。
 - **图像生成模型不接入** —— Magpie 插件体系没有生图通道，见第四节末尾。
 
 ---
@@ -466,6 +473,7 @@ node --test test/*.test.mjs
 - `fetch` 钩子在 `(url, init)` 与 `Request` 两种入参下都保住 body 和 headers；
 - `__` 前缀的内部键不会写进凭据文件；
 - 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
+- 模块不携带任何内置模型清单（`FALLBACK_MODELS` 必须不存在）；
 - 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 authorize → token → 额度）；
 - 语言解析（显式指定、系统、环境变量、POSIX `C`）；两张字符串表保持同步；

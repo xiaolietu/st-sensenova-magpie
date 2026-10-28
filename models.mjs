@@ -4,16 +4,14 @@
  * The Token Plan speaks the OpenAI dialect at `https://token.sensenova.cn/v1`,
  * and `GET /v1/models` is a documented endpoint — it returns `{ data: [ … ] }`
  * with the id, modalities, context window, pricing and capability flags for
- * every model the account can use. That live list is the source of truth.
+ * every model the account can use. **That live list is the only source of
+ * models**: there is no built-in snapshot to drift out of date, so what the
+ * provider offers is exactly what the account is entitled to right now.
  *
  * Field names below follow the platform's own `Model` object, not OpenAI's:
  * `context_length` / `max_output_length` (not `max_completion_tokens`), and
  * capability flags arrive as members of `supported_features` rather than as
- * booleans. Reading the OpenAI spellings silently produced nothing, which is
- * how the plugin previously ended up serving its built-in snapshot forever.
- *
- * The snapshot in `FALLBACK_MODELS` only keeps the provider selectable before
- * the first sign-in and when a fetch fails.
+ * booleans.
  *
  * @module st-sensenova-magpie/models
  */
@@ -30,74 +28,15 @@ export const DEFAULT_TIMEOUT_MS = 15000;
 /** How long a fetched list is trusted, in hours. */
 export const DEFAULT_REFRESH_HOURS = 6;
 
+/**
+ * Fallbacks for a model whose entry omits a field.
+ *
+ * These are not a model list — they only keep one entry usable when the
+ * endpoint leaves something out, which the documented shape does not do.
+ */
 const DEFAULT_CONTEXT = 131072;
 const DEFAULT_OUTPUT = 32768;
-const ONE_MILLION = 1048576;
 
-/**
- * The chat models to declare before any network call.
- *
- * Taken from the platform's 模型总览. The two image-creation models
- * (`sensenova-u1.5-lite`, `sensenova-u1.5-fast`) are deliberately absent: they
- * are served by `/v1/images/generations`, not `/v1/chat/completions`, so
- * offering them to a chat provider would only produce failing requests.
- *
- * `sensenova-6.8-flash-lite` carries the context and output ceilings the
- * documented `/v1/models` example publishes; the rest are conservative
- * placeholders that the live list replaces.
- */
-export const FALLBACK_MODELS = [
-  {
-    id: "sensenova-6.8-flash-lite",
-    name: "SenseNova 6.8 Flash Lite",
-    contextLength: 262144,
-    maxCompletionTokens: 65536,
-    inputModalities: ["text", "image"],
-    outputModalities: ["text"],
-    supportsTools: true,
-    reasoning: true,
-  },
-  {
-    id: "deepseek-v4-flash",
-    name: "DeepSeek V4 Flash",
-    contextLength: DEFAULT_CONTEXT,
-    maxCompletionTokens: DEFAULT_OUTPUT,
-    inputModalities: ["text"],
-    outputModalities: ["text"],
-    supportsTools: true,
-    reasoning: true,
-  },
-  {
-    id: "deepseek-flash",
-    name: "DeepSeek V4.1 Flash",
-    contextLength: DEFAULT_CONTEXT,
-    maxCompletionTokens: DEFAULT_OUTPUT,
-    inputModalities: ["text", "image"],
-    outputModalities: ["text"],
-    supportsTools: true,
-    reasoning: true,
-  },
-  {
-    id: "glm-5.2",
-    name: "GLM-5.2",
-    contextLength: ONE_MILLION,
-    maxCompletionTokens: DEFAULT_OUTPUT,
-    inputModalities: ["text"],
-    outputModalities: ["text"],
-    supportsTools: true,
-    reasoning: true,
-  },
-  {
-    id: "kimi-k3",
-    name: "Kimi K3",
-    contextLength: ONE_MILLION,
-    maxCompletionTokens: DEFAULT_OUTPUT,
-    inputModalities: ["text", "image"],
-    outputModalities: ["text"],
-    supportsTools: true,
-    reasoning: true,
-  },
-];
 
 const positive = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
 const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -111,6 +50,9 @@ const price = (v) => {
 /**
  * Normalize one `Model` object from `GET /v1/models`.
  *
+ * Every field the platform sends is used as-is. The constants only fill in a
+ * field the response left out, so one incomplete entry cannot break the list.
+ *
  * @param {object} raw - one entry from the endpoint.
  * @returns {object|null} a normalized model, or null when it has no id.
  */
@@ -119,7 +61,6 @@ export function normalizeModel(raw) {
   const id = text(raw.id) ?? text(raw.model_id) ?? text(raw.model);
   if (!id) return null;
 
-  const fallback = FALLBACK_MODELS.find((m) => m.id === id);
   const features = list(raw.supported_features ?? raw.supportedFeatures);
   // An empty array means "nothing declared", not "supports nothing": the
   // platform lists image-creation models with `[]`, and a chat model whose
@@ -132,26 +73,19 @@ export function normalizeModel(raw) {
 
   return {
     id,
-    name: text(raw.name) ?? text(raw.model_name) ?? fallback?.name ?? id,
+    name: text(raw.name) ?? text(raw.model_name) ?? id,
     description: text(raw.description),
     contextLength:
-      positive(raw.context_length ?? raw.contextLength) ??
-      fallback?.contextLength ??
-      DEFAULT_CONTEXT,
+      positive(raw.context_length ?? raw.contextLength) ?? DEFAULT_CONTEXT,
     maxCompletionTokens:
       positive(raw.max_output_length ?? raw.maxOutputLength ?? raw.max_output_tokens) ??
-      fallback?.maxCompletionTokens ??
       DEFAULT_OUTPUT,
-    inputModalities: list(raw.input_modalities) ?? fallback?.inputModalities ?? ["text"],
-    outputModalities: list(raw.output_modalities) ?? fallback?.outputModalities ?? ["text"],
+    inputModalities: list(raw.input_modalities) ?? ["text"],
+    outputModalities: list(raw.output_modalities) ?? ["text"],
     // The platform reports capabilities as a list of feature names rather than
     // as per-feature booleans, so membership is the only reliable signal.
-    supportsTools: declaresFeatures
-      ? features.includes("tools")
-      : (fallback?.supportsTools ?? true),
-    reasoning: declaresFeatures
-      ? features.includes("reasoning")
-      : (fallback?.reasoning ?? true),
+    supportsTools: declaresFeatures ? features.includes("tools") : true,
+    reasoning: declaresFeatures ? features.includes("reasoning") : true,
     supportsJsonMode: declaresFeatures ? features.includes("json_mode") : undefined,
     // Sampling support decides whether the host may send `temperature` at all.
     supportsTemperature: sampling ? sampling.includes("temperature") : true,

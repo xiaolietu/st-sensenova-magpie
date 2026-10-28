@@ -207,7 +207,12 @@ test("normalizeModel 给未知模型兜底，没有 id 的条目被丢掉", () =
 });
 
 test("toConfigModel / toProviderModel 形状符合 Magpie 约定", () => {
-  const m = normalizeModel({ id: "sensenova-6.8-flash-lite" });
+  // Modalities now come from the response, not from a built-in snapshot.
+  const m = normalizeModel({
+    id: "sensenova-6.8-flash-lite",
+    input_modalities: ["text", "image"],
+    output_modalities: ["text"],
+  });
   const cfgModel = toConfigModel(m);
   assert.deepEqual(Object.keys(cfgModel).sort(), [
     "attachment",
@@ -217,7 +222,7 @@ test("toConfigModel / toProviderModel 形状符合 Magpie 约定", () => {
     "reasoning",
     "tool_call",
   ]);
-  assert.equal(cfgModel.attachment, true, "Flash-Lite 支持图片输入");
+  assert.equal(cfgModel.attachment, true, "接口声明了图片输入，attachment 应为 true");
 
   const provModel = toProviderModel(m, "sensenova");
   assert.equal(provModel.id, "sensenova-6.8-flash-lite");
