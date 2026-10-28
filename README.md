@@ -60,15 +60,17 @@ magpie plugin add <本仓库路径>
 magpie plugin login sensenova
 ```
 
+插件在 Magpie 里显示为「**日日新模型平台**」，添加第二个账号时按钮是「添加另一个日日新模型平台账号」—— 这两个名字都取自供应商的显示名，不单独维护。
+
 ### 登录会问什么
 
 共三项，**API Key 只问一次**：
 
 | 顺序 | 提问 | 必填 | 来源 |
 | --- | --- | --- | --- |
-| 1 | SenseNova 账号（手机号 / 邮箱） | 否 | 插件提问 |
+| 1 | 日日新模型平台账号（登录用的用户名） | 否 | 插件提问 |
 | 2 | 账号密码 | 否 | 插件提问 |
-| 3 | **SenseNova API Key** | **是** | Magpie 自己的 key 输入框（标题取自方法的 `label`） |
+| 3 | **日日新模型平台 API Key** | **是** | Magpie 自己的 key 输入框（标题取自方法的 `label`） |
 
 第 3 项由宿主提供，插件不再重复问一遍 —— 早期版本额外声明了一条 key 提示，导致同一把 key 要输入两次，已移除。没有 Key 供应商发不出任何请求。
 
@@ -154,6 +156,24 @@ Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入
 `/v1/models` 也会列出图像创作模型（`sensenova-u1.5-lite` 等），它们的 `output_modalities` 是 `["image"]`，走的是 `/v1/images/generations`。**本插件只讲 chat completions，所以这些条目被过滤掉了** —— 实测把它们发给 `/v1/chat/completions` 只会得到 404 `model is not found`。凡是 `output_modalities` 含 `text` 的都保留。
 
 > 为什么图像模型不能接：Magpie 的插件体系没有生图通道。它的 npm 到 API 映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions），模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
+
+### 列表里的模型不一定都能用
+
+`/v1/models` 返回的是平台当前在售的模型，**不等于你的套餐能用哪些**。
+
+实测（2026-10-28，一个 Free Plan 账号）：
+
+| 模型 | 列表里 | 实际请求 |
+| --- | --- | --- |
+| `deepseek-v4-flash` | ✓ | 200 |
+| `deepseek-flash` | ✓ | 200（偶发 429，见下） |
+| `deepseek-v4.1-flash` | ✓ | **403 `model is not available in the current token plan`** |
+
+`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。所以插件无法预判，只能照实列出 —— 这也是为什么它不内置清单：写死就会和真实状态脱节。
+
+另有一种**限流**：连续快速请求时 `deepseek-flash` 会返回 `429 inference exceeds tpm/rpm limit`，等待 20 秒后恢复正常。这是速率限制，不是模型不可用。
+
+文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**。
 
 ---
 
@@ -262,7 +282,8 @@ magpie plugin options sensenova '{"locale":"en"}'
 
 ## 六、已知限制
 
-- **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
+- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），而响应里没有任何可判别的字段，所以插件无法过滤，只能照实展示 —— 遇到 403 就是套餐不含该模型。
+- **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
 - 额度接口是控制台内部接口而非公开接口，改版可能使其失效。

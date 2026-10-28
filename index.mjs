@@ -163,7 +163,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       cfg.provider ??= {};
       const was = cfg.provider[PROVIDER] ?? {};
       cfg.provider[PROVIDER] = {
-        name: "SenseNova",
+        name: "日日新模型平台",
         npm: NPM,
         api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
@@ -272,7 +272,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       methods: [
         {
           type: "api",
-          label: "SenseNova API key",
+          label: "日日新模型平台账号",
           placeholder: "sk-…",
           prompts: [
             {

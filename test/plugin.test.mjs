@@ -175,8 +175,19 @@ test("提示里不能再问 key，宿主的 key 输入框已经问过一次", as
 
   // 没有 authorize 时 Magpie 才把 key 原样保存成 {type:"api", key}。
   assert.equal(plugin.auth.methods[0].authorize, undefined);
-  assert.equal(plugin.auth.methods[0].label, "SenseNova API key");
+  assert.equal(plugin.auth.methods[0].label, "日日新模型平台账号");
   assert.equal(plugin.auth.methods[0].placeholder, "sk-…");
+});
+
+test("供应商显示名与账号提示用中文品牌名", async () => {
+  const plugin = await SenseNovaPlugin({}, {});
+  const cfg = {};
+  await plugin.config(cfg);
+  assert.equal(cfg.provider.sensenova.name, "日日新模型平台");
+
+  const zh = await SenseNovaPlugin({}, { locale: "zh" });
+  assert.equal(zh.auth.methods[0].prompts[0].placeholder, "用户名");
+  assert.match(zh.auth.methods[0].prompts[0].message, /日日新模型平台/);
 });
 
 test("账号提问的字段名必须是 email，否则账号行只显示 API Key", async () => {
