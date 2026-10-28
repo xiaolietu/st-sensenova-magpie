@@ -169,11 +169,23 @@ Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入
 | `deepseek-flash` | ✓ | 200（偶发 429，见下） |
 | `deepseek-v4.1-flash` | ✓ | **403 `model is not available in the current token plan`** |
 
-`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。所以插件无法预判，只能照实列出 —— 这也是为什么它不内置清单：写死就会和真实状态脱节。
+`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。平台自己的模型总览也没有列它。
+
+所以这个 id 只能按名字排除，`excludeModels` 默认值就是它：
+
+```json
+{ "options": { "excludeModels": ["deepseek-v4.1-flash"] } }
+```
+
+**这不是快照，是黑名单**：名单之外的模型仍然全部来自接口，接口新增什么就显示什么。如果你的套餐实际能调用它（或者平台以后补货），把它从名单里去掉、或直接传 `[]` 全量显示：
+
+```bash
+magpie plugin options sensenova '{"excludeModels": []}'
+```
 
 另有一种**限流**：连续快速请求时 `deepseek-flash` 会返回 `429 inference exceeds tpm/rpm limit`，等待 20 秒后恢复正常。这是速率限制，不是模型不可用。
 
-文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**。
+文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**，差异由这条黑名单兜住。
 
 ---
 
@@ -261,6 +273,7 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 | `scopeModel` | `flash-lite` | 当接口没有给出 `model_ids` 时，用哪个关键词圈定专属池的模型 |
 | `locale` | `auto` | `zh` / `en` / `auto`（跟随本机） |
 | `credentialsFile` | `~/.sensenova-quota.json` | 控制台凭据文件位置。**它只改变写回路径，不能关闭写回** |
+| `excludeModels` | `["deepseek-v4.1-flash"]` | 从模型列表里剔除的 id。接口会列出当前套餐不可用的模型，这里按 id 排除；传 `[]` 则完全照接口显示 |
 
 凭据文件的解析顺序是：`credentialsFile` 选项 → 环境变量 `SENSENOVA_QUOTA_CONFIG` → `~/.sensenova-quota.json`。**选项优先**，只有它没设置时才看环境变量。
 
@@ -282,7 +295,7 @@ magpie plugin options sensenova '{"locale":"en"}'
 
 ## 六、已知限制
 
-- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），而响应里没有任何可判别的字段，所以插件无法过滤，只能照实展示 —— 遇到 403 就是套餐不含该模型。
+- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段，所以只能按 id 用 `excludeModels` 排除 —— 默认已排除该 id，遇到别的 403 就把它加进名单。
 - **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
@@ -491,7 +504,7 @@ Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（�
 node --test test/*.test.mjs
 ```
 
-当前 80 个测试，覆盖：
+当前 88 个测试，覆盖：
 
 - 积分池到窗口的映射（`used` 百分比、`amount`、`limit`、`span`、`resetsAt`、专属池的模型圈定、赠送余额）；
 - `limit - amount` 能复现控制台的余额；
@@ -501,6 +514,7 @@ node --test test/*.test.mjs
 - `__` 前缀的内部键不会写进凭据文件；
 - 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
 - 模块不携带任何内置模型清单（`FALLBACK_MODELS` 必须不存在）；
+- 模型黑名单（默认值就是被套餐拒绝的 `deepseek-v4.1-flash`、传 `[]` 全量显示、自定义名单是替换而非叠加、非字符串条目被忽略）；
 - 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；
 - 登录方法只声明 `email` 与 `password` 两条提示，不含 `key`，也不声明 `authorize`（key 由宿主自己的输入框收集）；

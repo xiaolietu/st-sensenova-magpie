@@ -125,6 +125,36 @@ export function isChatModel(model) {
 }
 
 /**
+ * Model ids to hide even though the endpoint lists them.
+ *
+ * `GET /v1/models` is not filtered by plan: it advertises models the account
+ * cannot call. Measured 2026-10-28 — `deepseek-v4.1-flash` answers
+ * `403 model is not available in the current token plan` on every attempt,
+ * while its response entry is byte-for-byte identical to `deepseek-flash` in
+ * every field the endpoint exposes (same context, features, pricing and even
+ * `businesses: ["tokenplan","metered"]`). There is nothing to filter on except
+ * the id, and the platform's own 模型总览 does not list it either.
+ *
+ * This is a **deny-list, not a snapshot**: everything not named here still
+ * comes from the endpoint. Override it with the `excludeModels` option — `[]`
+ * shows everything the endpoint returns, which is the right setting on a plan
+ * that actually serves these ids.
+ */
+export const DEFAULT_EXCLUDED_MODELS = ["deepseek-v4.1-flash"];
+
+/**
+ * Drop the given ids from a normalized model list.
+ *
+ * @param {Array<object>} models - normalized models.
+ * @param {Array<string>} [excluded] - ids to drop; empty or absent keeps all.
+ */
+export function excludeModels(models, excluded) {
+  if (!Array.isArray(excluded) || excluded.length === 0) return models;
+  const drop = new Set(excluded.filter((id) => typeof id === "string"));
+  return models.filter((m) => !drop.has(m.id));
+}
+
+/**
  * A catalog that fetches once per key and caches the result.
  *
  * A failed fetch throws, so the caller can mark what it serves as remembered

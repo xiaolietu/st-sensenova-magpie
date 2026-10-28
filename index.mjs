@@ -26,7 +26,7 @@
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, readAuth } from "./internal.mjs";
-import { DEFAULT_BASE_URL, NPM, createCatalog, toProviderModel } from "./models.mjs";
+import { DEFAULT_BASE_URL, DEFAULT_EXCLUDED_MODELS, NPM, createCatalog, excludeModels, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -47,6 +47,11 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
     quotaTtlMs: Number(options.quotaTtlMs) > 0 ? Number(options.quotaTtlMs) : DEFAULT_QUOTA_TTL_MS,
     scopeModel: typeof options.scopeModel === "string" ? options.scopeModel : "flash-lite",
     credentialsFile: options.credentialsFile ?? undefined,
+    // `undefined` means "use the deny-list"; an explicit array (including `[]`)
+    // is taken as given, so a plan that serves these ids can clear it.
+    excludeModels: Array.isArray(options.excludeModels)
+      ? options.excludeModels.filter((id) => typeof id === "string")
+      : DEFAULT_EXCLUDED_MODELS,
   };
   const catalog = createCatalog({ baseURL: opts.baseURL });
 
@@ -176,6 +181,11 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       /**
        * The models this account can actually use, straight from `/v1/models`.
        *
+       * Two things are removed from what the endpoint returns: the image
+       * creation models (dropped in the catalog) and the ids named in
+       * `excludeModels` — models the endpoint advertises but the plan refuses
+       * with 403. Everything else is passed through untouched.
+       *
        * On failure the last list that was fetched is served and marked with
        * Magpie's fallback flag, so a transient error does not empty the model
        * picker. Before the first successful fetch there is nothing to serve and
@@ -183,17 +193,20 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
-        const asProvider = (list) =>
-          Object.fromEntries(
-            list.map((m) => [
+        const asProvider = (list) => {
+          const shown = excludeModels(list, opts.excludeModels);
+          return Object.fromEntries(
+            shown.map((m) => [
               m.id,
               toProviderModel(m, id, { baseURL: opts.baseURL ?? catalog.baseURL }),
             ])
           );
+        };
         /** What to serve when the live list is unavailable. */
         const remembered = () => {
           const known = catalog.peek();
-          return fellBack(known?.length ? asProvider(known) : (provider?.models ?? {}));
+          const shown = known?.length ? asProvider(known) : null;
+          return fellBack(shown && Object.keys(shown).length ? shown : (provider?.models ?? {}));
         };
 
         const key = apiKeyOf(auth);
@@ -201,7 +214,8 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         try {
           const live = await catalog.load(key);
           if (!live.length) return remembered();
-          return asProvider(live);
+          const shown = asProvider(live);
+          return Object.keys(shown).length ? shown : remembered();
         } catch (error) {
           log("warn", `sensenova: keeping the known model list: ${error.message}`);
           return remembered();
