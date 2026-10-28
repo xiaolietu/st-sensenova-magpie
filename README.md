@@ -148,7 +148,9 @@ magpie plugin options sensenova '{"locale":"en"}'
 | `supported_sampling_parameters` | 决定能不能发 `temperature` |
 | `pricing.prompt` / `.completion` / `.input_cache_read` | 映射为 `cost.input` / `cost.output` / `cost.cache.read` |
 
-**两个容易写错、而且确实写错过的点**：平台把输出上限拼成 `max_output_length`（不是 OpenAI 的 `max_completion_tokens`）；能力是 **`supported_features` 数组的成员**，不是逐项的布尔字段。按 OpenAI 的拼法去读会一无所获。
+**两个容易写错、而且确实写错过**：平台把输出上限拼成 `max_output_length`（不是 OpenAI 的 `max_completion_tokens`）；能力是 **`supported_features` 数组的成员**，不是逐项的布尔字段。按 OpenAI 的拼法去读会一无所获。
+
+上表 12 个字段在真实响应中逐条核对过：每个模型都带全，没有一条缺失。
 
 列表按 **API Key 分桶缓存 6 小时**，所以切换账号不会复用上一个账号的模型列表。
 
@@ -410,6 +412,7 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 
 ## 九、已知限制
 
+- **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大 `max_tokens` 即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
 - 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
