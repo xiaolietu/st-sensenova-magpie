@@ -1,5 +1,5 @@
 /**
- * SenseNova (商量 / 日日新) provider plugin for Magpie.
+ * SenseNova（商汤 · 日日新）provider plugin for Magpie.
  *
  * Two things in one package, because the platform splits them across two hosts:
  *

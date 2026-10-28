@@ -1,21 +1,26 @@
 # st-sensenova-magpie
 
 > 本仓库是 [aqiu817/magpie-sensenova](https://github.com/aqiu817/magpie-sensenova) 的独立维护分支。
-> 采用 MIT 许可，原始版权声明保留在 [LICENSE](LICENSE) 中。
-> 本仓库独立维护，不跟随上游同步。
+> MIT 许可，原始版权声明保留在 [LICENSE](LICENSE) 中；本仓库独立维护，不跟随上游同步。
 
-一个给 [Magpie](https://usemagpie.ai) 用的 **SenseNova（商汤 · 商量 / 日日新）** 供应商插件：把 Token Plan 的模型接进来，并把控制台的**积分额度**上报成 Magpie 原生的额度窗口。
+一个给 [Magpie](https://usemagpie.ai) 用的 **SenseNova（商汤 · 日日新）** 供应商插件。
 
 ```
 $ magpie quota
-sensenova  通用积分池 · 5 小时窗口   0% used ↻ 2h  ·  Flash-Lite积分池 · 5 小时窗口  22.8% used ↻ 2h
+sensenova  通用积分池 · 5 小时窗口  0% used ↻ 2h  ·  Flash-Lite积分池 · 5 小时窗口  22.8% used ↻ 2h
 ```
 
-窗口名称来自平台自己的积分池命名，由本插件转译 —— 详见第三节「配置项」里的 `locale`。上面是中文默认效果。
+三句话概括它做了什么：
+
+- **模型**来自 `GET /v1/models`，没有内置清单，账号能用什么就显示什么；
+- **额度**把控制台的积分池上报成 Magpie 原生的额度窗口，出现在账号行和 `magpie quota`；
+- **两套凭据**：模型用 API Key，额度用控制台令牌 —— 平台没有可用 API Key 读额度的接口，所以两者必须分开收集。
+
+> ⚠️ 登录时填写的**账号密码会以明文存进 Magpie 的凭据文件**。它只用于在令牌失效时兜底读额度，**留空完全不影响模型调用**。细节和取舍见[安全说明](#七安全说明)。
 
 ---
 
-## 一、这个插件做两件事
+## 一、它是什么
 
 平台的这两部分不在同一个地方，所以插件同时承担两项职责：
 
@@ -24,26 +29,24 @@ sensenova  通用积分池 · 5 小时窗口   0% used ↻ 2h  ·  Flash-Lite积
 | **模型调用** | `https://token.sensenova.cn/v1`（OpenAI 兼容） | API Key |
 | **积分额度** | 控制台主机上的一个内部接口 | 控制台 OAuth 令牌 |
 
-**平台没有提供任何可以用 API Key 读取额度的接口。** 逐个试过十几个候选路径（`/v1/llm/usage`、`/v1/llm/quota`、`/v1/llm/balance`、`/v1/dashboard/billing/subscription` 等），全部返回 404；额度只存在于控制台前端自己调用的那个接口后面，需要 Ory 的 bearer 令牌。
+**平台没有提供任何可以用 API Key 读取额度的接口。** 逐个试过十几个候选路径（`/v1/llm/usage`、`/v1/llm/quota`、`/v1/llm/balance`、`/v1/dashboard/billing/subscription` 等），全部返回 404；额度只存在于控制台前端自己调用的那个接口后面，需要 Ory 的 bearer 令牌。因此这两套凭据是**真正独立的**，插件在登录时分别收集。
 
-因此这两套凭据是**真正独立的**，插件在登录时分别收集。
+### 接口协议
 
-### 使用的接口协议
-
-模型请求走的是 **OpenAI Chat Completions**：
+模型请求走 **OpenAI Chat Completions**：
 
 ```
 POST https://token.sensenova.cn/v1/chat/completions
 ```
 
-协议由 `npm` 字段决定，代码里是 `models.mjs` 的常量 `NPM = "@ai-sdk/openai-compatible"`。Magpie 的映射规则是：除 Anthropic / OpenAI Responses / Gemini 之外的一切包，一律走 chat completions。
+协议由 `npm` 字段决定，代码里是 `models.mjs` 的常量 `NPM = "@ai-sdk/openai-compatible"`；Magpie 的映射规则是「除 Anthropic / OpenAI Responses / Gemini 之外的一切包，一律走 chat completions」。
 
 SenseNova 另外还提供两种兼容端点，**本插件均未使用**：
 
 | 协议 | 端点 | 说明 |
 | --- | --- | --- |
 | OpenAI Chat Completions | `/v1/chat/completions` | **当前使用** |
-| OpenAI Responses | `/v1/responses` | 文档称覆盖全部 5 个对话模型；但为无状态实现，不支持响应存储、`previous_response_id` 续写、Conversations、后台任务、Webhook、上下文压缩，内置工具仅支持 function |
+| OpenAI Responses | `/v1/responses` | 文档称覆盖全部对话模型，但为无状态实现：不支持响应存储、`previous_response_id` 续写、Conversations、后台任务、Webhook、上下文压缩，内置工具仅支持 function |
 | Anthropic Messages | `/v1/messages` | 面向 Anthropic SDK / Claude 生态 |
 
 改成 Responses 只需把 `NPM` 换成 `"@ai-sdk/openai"`，Magpie 会自动把请求发到 `/v1/responses`，`baseURL` 不用动。当前不切换的原因：它的「有状态」优势一个都没实现，切过去拿不到收益，却要重新验证一遍请求形状。
@@ -57,7 +60,9 @@ magpie plugin add <本仓库路径>
 magpie plugin login sensenova
 ```
 
-登录会问三项，但 **API Key 只问一次**：
+### 登录会问什么
+
+共三项，**API Key 只问一次**：
 
 | 顺序 | 提问 | 必填 | 来源 |
 | --- | --- | --- | --- |
@@ -69,9 +74,26 @@ magpie plugin login sensenova
 
 账号和密码留空没问题：插件会回退去读 `~/.sensenova-quota.json`，那是 `snquota` 命令行在本机写下的文件。
 
-**登录之后才会有模型可选** —— 插件不内置模型清单，模型是登录后从 `GET /v1/models` 实时拉取的（见第四节）。
+**登录之后才会有模型可选** —— 插件不内置模型清单，模型是登录后实时拉取的（见[第三节](#三模型)）。
 
-### Windows 下提示符报错的处理
+### 账号行显示的名字
+
+Magpie 给账号命名时依次看 `accountId`、`metadata.email`、`email`，都不存在时才退化为用凭据本身命名 —— 也就是你可能见过的 `API key …HohJ`。
+
+所以这个名字**在登录那一刻定下来**：填了账号字段，行上就显示那个手机号或邮箱；留空就保持 API Key 兜底命名。
+
+实测下来只有一条路走得通，其余几条都会失败：
+
+- **提示项的 `key` 才是决定因素。** 本插件把账号问在 `email` 这个 key 下，答案落进 `metadata.email` —— Magpie 读的正是这个字段。
+- **`accountId` 靠不住**（`api` 类型）。它只对 oauth 结果有文档说明，带着它登录仍然显示 `API key`。
+- **`metadata` 不能由代码塞**，Magpie 用提示收集到的答案覆盖它。
+- **`usage.user` 也不会改名。** 钩子返回的 `user` 只存在 Magpie 的额度缓存里（`quotas.json` → `quota.user`），账号行仍渲染登录时的标签。
+
+所以本插件不声明 `authorize` —— 它对命名没有帮助，只用来校验 key，而宿主已经负责收集。
+
+更早的登录把账号存在 `metadata.username` 下，所以 `consoleAuthOf` 仍会读这个拼写（以及 `account`）作为回退。**如果你在支持这个行为之前就登录过**，存下的标签仍是 API Key 那种，重跑一次 `magpie plugin login sensenova` 即可。
+
+### Windows 下提示符报错
 
 Magpie 的提示符读取器需要一个真正的 Windows 控制台。在 Git Bash / mintty 这类不提供控制台的 shell 里，第一个提示就会失败：
 
@@ -91,50 +113,7 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 ---
 
-## 三、配置项
-
-`plugins.json` 里这一项的 `options`：
-
-```json
-{
-  "spec": "…/st-sensenova-magpie",
-  "options": {
-    "baseURL": "https://token.sensenova.cn/v1",
-    "quotaTtlMs": 60000,
-    "scopeModel": "flash-lite",
-    "locale": "auto",
-    "credentialsFile": "~/.sensenova-quota.json"
-  }
-}
-```
-
-| 配置项 | 默认值 | 含义 |
-| --- | --- | --- |
-| `baseURL` | `https://token.sensenova.cn/v1` | Token Plan 地址 |
-| `quotaTtlMs` | `60000` | 额度读取的缓存时长（毫秒）。`usage` 钩子会被轮询，缓存用来避免频繁打接口 |
-| `scopeModel` | `flash-lite` | 当接口没有给出 `model_ids` 时，用哪个关键词圈定专属池的模型 |
-| `locale` | `auto` | `zh` / `en` / `auto`（跟随本机） |
-| `credentialsFile` | `~/.sensenova-quota.json` | 控制台凭据文件位置。**它只改变写回路径，不能关闭写回** |
-
-凭据文件的解析顺序是：`credentialsFile` 选项 → 环境变量 `SENSENOVA_QUOTA_CONFIG` → `~/.sensenova-quota.json`。**选项优先**，只有它没设置时才看环境变量。
-
-### 关于 `locale`
-
-Magpie 不向插件暴露语言设置，也不给插件做设置界面，所以插件渲染的一切文字 —— 额度窗口名称、单位、错误信息、登录提示 —— 都由这里决定。改完下次加载生效：
-
-```bash
-magpie plugin options sensenova '{"locale":"en"}'
-```
-
-`auto` 通过 `Intl` 读系统区域，这也是 Windows 上真正生效的那条路；`LANG` 只在 `Intl` 无话可说时才参考，所以 Git Bash 里一个 `LANG=C.UTF-8` 不会把中文机器翻成英文。无法识别的一律回退英文。
-
-译文取自控制台自己的英文站点（**General Pool**、**Flash-Lite Dedicated Pool**、单位 **credits**），不是自己编的。必须由插件翻译的原因是**额度接口不做本地化** —— 实测在真实账号上，`Accept-Language: zh-CN` 和 `en-US` 都返回 `["通用积分池","Flash-Lite积分池"]`，控制台的英文站是在它自己的前端里翻译的。
-
-登录提示是唯一不能随时切换的部分：答案在登录那一刻就存下来了，改 `locale` 不会重新翻译已经答过的题目。
-
----
-
-## 四、模型
+## 三、模型
 
 模型列表来自官方文档的 `GET /v1/models` 接口（[模型列表 List Models](https://platform.sensenova.cn/docs)），返回 `{ data: [ … ] }`，每个 `Model` 对象携带供应商需要的全部信息：
 
@@ -172,15 +151,15 @@ Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入
 
 ### 对话模型与图像模型
 
-`/v1/models` 也会列出两个图像创作模型 —— `sensenova-u1.5-lite` 和 `sensenova-u1.5-fast` —— 它们的 `output_modalities` 是 `["image"]`，走的是 `/v1/images/generations`。**本插件只讲 chat completions，所以这两条被过滤掉了**，不会列出来让请求在运行时报错。凡是 `output_modalities` 含 `text` 的都保留。
+`/v1/models` 也会列出图像创作模型（`sensenova-u1.5-lite` 等），它们的 `output_modalities` 是 `["image"]`，走的是 `/v1/images/generations`。**本插件只讲 chat completions，所以这些条目被过滤掉了** —— 实测把它们发给 `/v1/chat/completions` 只会得到 404 `model is not found`。凡是 `output_modalities` 含 `text` 的都保留。
 
 > 为什么图像模型不能接：Magpie 的插件体系没有生图通道。它的 npm 到 API 映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions），模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
 
 ---
 
-## 五、额度
+## 四、额度
 
-### 额度显示在哪
+### 显示在哪
 
 Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何东西能往用量概览页填内容 —— 那个页面由 Magpie 自己的请求计量驱动。
 
@@ -207,11 +186,11 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 
 除了 `used`（已用百分比）和 `limit`（配额），每个窗口还必须带 **`amount`（已用数量）**。
 
-这是踩过坑才发现的：只给 `used` 和 `limit`，百分比是对的，但界面上的数字会显示成 `0 / 600000`，和真实余额完全不像。Magpie 把卡片渲染成「已用 / 配额」，还提供一个「已用 | 剩余」的切换，两边都从 `amount` 算；没有它，数量就被当作 0。
+只给 `used` 和 `limit` 时，百分比是对的，但界面上的数字会显示成 `0 / 600000`，和真实余额完全不像。Magpie 把卡片渲染成「已用 / 配额」，还提供一个「已用 | 剩余」的切换，两边都从 `amount` 算；没有它，数量就被当作 0。
 
 这个字段**不在插件文档的窗口字段列表里**（文档只列了 `name` / `used` / `resetsAt` / `resetSecs` / `span` / `display` / `model` / `models` / `notModels` / `aside`）。它是通过对照两个社区插件的实现还原出来的 —— `@magpie-community/opencode-workbuddy-auth` 和 `opencode-zcode-auth` 都设置了它。
 
-所以本插件输出的每个窗口都带 `used`（百分比）、`amount`（已用数量）、`limit`、`unit`、`display`、`span`、`resetsAt`，专属池另外带 `models`。`display` 用 Magpie 自己的紧凑格式（整数给整数，否则两位小数），以便和 `amount` / `limit` 并排渲染时对齐。
+所以本插件输出的每个窗口都带 `used`、`amount`、`limit`、`unit`、`display`、`span`、`resetsAt`，专属池另外带 `models`。`display` 用 Magpie 自己的紧凑格式（整数给整数，否则两位小数），以便和 `amount` / `limit` 并排渲染时对齐。
 
 对账很简单：`limit - amount` 必须等于控制台显示的剩余余额。
 
@@ -222,10 +201,8 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 三条证据：
 
 1. 控制台自己的横幅写着「**同账户所有 Key 共享**」。
-2. 额度接口的响应里**完全没有 Key 这个维度** —— 顶层只有 `{plan, pools}`，每个池带 `id` / `name` / `model_ids` / `window_5h` / `window_7d` / `grant_balance` / `pool_type`，没有任何 Key 标识。
+2. 额度接口的响应里**完全没有 Key 这个维度** —— 顶层只有 `{plan, pools}`，每个池带 `id` / `name` / `model_ids` / `window_5h` / `window_7d` / `grant_balance` / `pool_type`。
 3. 按 Key 的拆分在别处：控制台的**使用明细**页。那个接口支持按 `apiKey` 过滤，每条调用记录都带自己的 Key，可导出 CSV / Excel。
-
-所以这是两个不同层次：
 
 | | 维度 | 是什么 |
 | --- | --- | --- |
@@ -240,7 +217,62 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 
 ---
 
-## 六、安全说明
+## 五、配置项
+
+`plugins.json` 里这一项的 `options`：
+
+```json
+{
+  "spec": "…/st-sensenova-magpie",
+  "options": {
+    "baseURL": "https://token.sensenova.cn/v1",
+    "quotaTtlMs": 60000,
+    "scopeModel": "flash-lite",
+    "locale": "auto",
+    "credentialsFile": "~/.sensenova-quota.json"
+  }
+}
+```
+
+| 配置项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `baseURL` | `https://token.sensenova.cn/v1` | Token Plan 地址 |
+| `quotaTtlMs` | `60000` | 额度读取的缓存时长（毫秒）。`usage` 钩子会被轮询，缓存用来避免频繁打接口 |
+| `scopeModel` | `flash-lite` | 当接口没有给出 `model_ids` 时，用哪个关键词圈定专属池的模型 |
+| `locale` | `auto` | `zh` / `en` / `auto`（跟随本机） |
+| `credentialsFile` | `~/.sensenova-quota.json` | 控制台凭据文件位置。**它只改变写回路径，不能关闭写回** |
+
+凭据文件的解析顺序是：`credentialsFile` 选项 → 环境变量 `SENSENOVA_QUOTA_CONFIG` → `~/.sensenova-quota.json`。**选项优先**，只有它没设置时才看环境变量。
+
+### `locale`
+
+Magpie 不向插件暴露语言设置，也不给插件做设置界面，所以插件渲染的一切文字 —— 额度窗口名称、单位、错误信息、登录提示 —— 都由这里决定。改完下次加载生效：
+
+```bash
+magpie plugin options sensenova '{"locale":"en"}'
+```
+
+`auto` 通过 `Intl` 读系统区域，这也是 Windows 上真正生效的那条路；`LANG` 只在 `Intl` 无话可说时才参考，所以 Git Bash 里一个 `LANG=C.UTF-8` 不会把中文机器翻成英文。无法识别的一律回退英文。
+
+译文取自控制台自己的英文站点（**General Pool**、**Flash-Lite Dedicated Pool**、单位 **credits**），不是自己编的。必须由插件翻译的原因是**额度接口不做本地化** —— 实测在真实账号上，`Accept-Language: zh-CN` 和 `en-US` 都返回 `["通用积分池","Flash-Lite积分池"]`，控制台的英文站是在它自己的前端里翻译的。
+
+登录提示是唯一不能随时切换的部分：答案在登录那一刻就存下来了，改 `locale` 不会重新翻译已经答过的题目。
+
+---
+
+## 六、已知限制
+
+- **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
+- **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
+- 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
+- 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
+- 登录之前供应商没有可选模型；首次拉取失败时同样为空，因为没有内置清单可退。
+- 接口若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入），文档所述的响应形状不会省略。
+- **图像生成模型不接入** —— Magpie 插件体系没有生图通道，见第三节末尾。
+
+---
+
+## 七、安全说明
 
 **本插件是本地第三方客户端，与商汤无隶属关系。** 下面每一条都注明依据来源，分三类：
 
@@ -250,7 +282,7 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 
 前两类描述外部世界，平台一改就可能失效；第三类描述本包，随版本走。**如果标注「插件代码」的内容和你的观察不符，以代码为准并提 issue。**
 
-> 说明：标注「实测」的条目是对真实接口的观测，来自上游作者与后续维护者的验证记录，本仓库未逐一复测；平台改版可能使其失效，以你观察到的现象为准。
+> 标注「实测」的条目来自上游作者与后续维护者的验证记录，本仓库未逐一复测；平台改版可能使其失效，以你观察到的现象为准。
 
 ### 1. 存了什么，存在哪
 
@@ -353,13 +385,13 @@ async fetch(input, init) {
 
 Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（插件及其配置）、`plugin-providers.json`（上次列出的供应商与模型）。另外，**插件详情页展示的是 npm 上的 README** —— 所以这份 README 是本插件唯一的披露面，这也是它每一条都写成可核查的原因。
 
-### 8. 风险声明：额度接口是控制台内部接口，不是公开 API
+### 8. 风险声明：额度接口是控制台内部接口
 
 额度数字来自控制台主机上的一个接口，**控制台前端自己**用它绘制积分面板。它没有文档，随时可能改变或消失。具体路径刻意没有写在这里，需要看的话在 `quota.mjs` 里。
 
 走这条路的原因是平台**根本没有提供可用 API Key 访问的额度接口** —— 见第一节的实测结论。
 
-**风险不止「可能坏掉」**，说明白：
+**风险不止「可能坏掉」**：
 
 | 风险 | 意味着什么 |
 | --- | --- |
@@ -381,48 +413,7 @@ Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（�
 
 ---
 
-## 七、账号行显示的是什么
-
-Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`，都不存在时才退化为用凭据本身命名 —— 也就是你可能见过的 `API key …HohJ`。
-
-所以这个标签是**在登录那一刻**定下来的，取决于你填了什么：填了账号字段，行上就显示那个手机号或邮箱；留空就保持 Magpie 的 API Key 兜底命名。
-
-要让一个 `api` 类型的方法设上这个名字，实测下来只有一条路走得通：
-
-- **提示项的 `key` 才是决定因素。** 本插件把账号问在 `email` 这个 key 下，答案就落进 `metadata.email` —— Magpie 读的正是这个字段。实测：账号字段填 `139…7777` 的一次登录，账号行显示的正是这个值。
-- **`accountId` 靠不住**（`api` 类型）。它只对 oauth 结果有文档说明，带着它登录仍然显示 `API key`。
-- **`metadata` 不能由代码塞**，Magpie 用提示收集到的答案覆盖它，塞进去的 `email` 活不下来。
-- **`usage.user` 也不会改名。** 钩子返回的 `user` 存在 Magpie 的额度缓存里（`quotas.json` → `quota.user`），账号行和 `magpie quota` 仍然渲染登录时的标签；缓存键始终是 `sensenova/api key …hohj`。
-
-所以本插件不声明 `authorize` —— 它对命名没有任何帮助，只用来校验 key 而宿主已经负责收集。提示项的字段名才是唯一的开关。
-
-更早的登录把账号存在 `metadata.username` 下，所以 `consoleAuthOf` 仍会读这个拼写（以及 `account`）作为回退；只有新的登录能享受到命名改进。
-
-**如果你在支持这个行为之前就登录过**，存下的标签仍是 API Key 那种。重跑一次 `magpie plugin login sensenova` 即可。
-
----
-
-## 八、图标
-
-用的是平台自己的图标：`assets/sensenova.png` 就是 `https://platform.sensenova.cn/favicon.ico` 的原始字节。那个地址名为 `.ico`、响应头也写 `image/x-icon`，但文件内容实际是 65×65 的 PNG（366 字节），所以 data URI 按真实字节声明 `image/png`，而不是照着响应头写。
-
-图标是**内置而非按 URL 引用**，这样离线也能识别供应商，也不依赖平台继续提供该文件。`package.json` 里的 `magpie.icon` 字段仍指向那个地址，供发布到 npm 后的发现卡片使用。
-
----
-
-## 九、已知限制
-
-- **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大 `max_tokens` 即可；代码类任务建议 ≥ 4096。
-- **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
-- 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一个要求重新登录的错误。
-- 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
-- 登录之前供应商没有可选模型；首次拉取失败时同样为空，因为没有内置清单可退。
-- 接口若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入），文档所述的响应形状不会省略。
-- **图像生成模型不接入** —— Magpie 插件体系没有生图通道，见第四节末尾。
-
----
-
-## 十、如何分发
+## 八、如何分发
 
 把仓库推到 GitHub 并不会让它出现在 Magpie 里。按官方文档，插件有三条发现路径，满足一条即可。
 
@@ -454,7 +445,7 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
   "community": true,
   "summary": {
     "en": "SenseNova Token Plan models, with the console's credit quota reported as native quota windows.",
-    "zh": "接入商量/日日新 Token Plan 模型，并把控制台积分额度上报成原生额度窗口。"
+    "zh": "接入商汤日日新 Token Plan 模型，并把控制台积分额度上报成原生额度窗口。"
   }
 }
 ```
@@ -465,9 +456,15 @@ Magpie 给账号命名时，依次看 `accountId`、`metadata.email`、`email`�
 
 本仓库的 `repository` / `homepage` / `bugs` 字段指向 `xiaolietu/st-sensenova-magpie`，且仓库已带 `magpie-plugin` topic，所以**路径 1 当前已生效**。路径 2 和 3 属于可选，尚未做。
 
+### 图标
+
+`assets/sensenova.png` 就是 `https://platform.sensenova.cn/favicon.ico` 的原始字节 —— 那个地址名为 `.ico`、响应头也写 `image/x-icon`，但文件内容实际是 65×65 的 PNG（366 字节），所以 data URI 按真实字节声明 `image/png`，而不是照着响应头写。
+
+图标是**内置而非按 URL 引用**，这样离线也能识别供应商，也不依赖平台继续提供该文件。`package.json` 里的 `magpie.icon` 字段仍指向那个地址，供发布到 npm 后的发现卡片使用。
+
 ---
 
-## 十一、开发
+## 九、开发
 
 ```bash
 node --test test/*.test.mjs
@@ -489,12 +486,12 @@ node --test test/*.test.mjs
 - 语言解析（显式指定、系统、环境变量、POSIX `C`）；两张字符串表保持同步；
 - 共享池不被套用专属池的命名规则；
 - `accountNameOf` 从令牌读取、取不到时返回空而不是编一个名字；
-- 账号提示声明在 `email` 这个 key 下，且 `consoleAuthOf` 仍能读旧的 `username` / `account` 拼写；
+- `consoleAuthOf` 仍能读旧的 `username` / `account` 拼写；
 - `usage` 钩子在两种语言下端到端。
 
 ---
 
-## 十二、上游来源与许可
+## 十、上游来源与许可
 
 - 上游项目：[aqiu817/magpie-sensenova](https://github.com/aqiu817/magpie-sensenova)
 - 许可：MIT，原始版权归 aqiu817；本分支的修改版权归 xiaolietu，两行都保留在 [LICENSE](LICENSE) 中。

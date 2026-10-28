@@ -1,7 +1,7 @@
 {
   "name": "st-sensenova-magpie",
   "version": "0.1.0",
-  "description": "Magpie provider plugin for SenseNova (商量/日日新): Token Plan models over the OpenAI-compatible API, plus the console's 积分额度 reported as native Magpie quota windows",
+  "description": "Magpie provider plugin for SenseNova（商汤 · 日日新）: models come live from GET /v1/models with no built-in list, plus the console's 积分额度 reported as native Magpie quota windows",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
