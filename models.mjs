@@ -63,10 +63,11 @@ const FULL = ["tools", "json_mode", "reasoning"];
  * routes them there — it recognises an image model and does not send it to
  * `chat/completions` (`an image model: asked on the images API, not here`).
  *
- * Two entries carry different provenance and say so: `sensenova-u1.5-lite`
- * has measured limits from `/v1/models`, while `sensenova-u1.5-fast` is in the
- * docs but not in that response, so it gets no invented numbers. `isChatModel()`
- * stays as the boundary between the two families.
+ * `sensenova-u1.5-lite` is the only image model: the docs also list
+ * `sensenova-u1.5-fast`, but `/v1/models` has never returned it and something
+ * that cannot be listed cannot be measured — left out rather than given
+ * invented numbers. `isChatModel()` stays as the boundary between the two
+ * families.
  */
 const CATALOG = [
   {
@@ -134,15 +135,6 @@ const CATALOG = [
     name: "SenseNova U1.5 Lite",
     context_length: 262144,
     max_output_length: 65536,
-    input_modalities: ["text"],
-    output_modalities: ["image"],
-    supported_features: FULL,
-  },
-  {
-    // 文档里有（model_id 也是这个），但 /v1/models 至今没返回过它，所以没有
-    // 可抄的参数，就不编：留空走保守默认值，等接口给了再补。
-    id: "sensenova-u1.5-fast",
-    name: "SenseNova U1.5 Fast",
     input_modalities: ["text"],
     output_modalities: ["image"],
     supported_features: FULL,

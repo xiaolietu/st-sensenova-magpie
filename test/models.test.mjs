@@ -85,21 +85,19 @@ test("不在文档总览里的幽灵 id 不会出现在清单里", () => {
   assert.equal(ids.includes("deepseek-flash"), true);
 });
 
-test("两个生图模型也在清单里，但只有 u1.5-lite 有实测参数", () => {
+test("生图模型在清单里，参数逐项抄自 /v1/models", () => {
   const by = Object.fromEntries(allModels().map((m) => [m.id, m]));
   assert.deepEqual(by["sensenova-u1.5-lite"].outputModalities, ["image"]);
-  // 参数逐项抄自 /v1/models：上下文 262144、输出 65536、纯文本输入
   assert.equal(by["sensenova-u1.5-lite"].contextLength, 262144);
   assert.equal(by["sensenova-u1.5-lite"].maxCompletionTokens, 65536);
   assert.deepEqual(by["sensenova-u1.5-lite"].inputModalities, ["text"]);
-
-  // 文档里有这个 id，但接口从未返回过它，所以不编数字，走保守默认值
-  assert.equal(by["sensenova-u1.5-fast"].contextLength, 131072);
-  assert.equal(by["sensenova-u1.5-fast"].maxCompletionTokens, 32768);
 });
 
-test("生图模型不算对话模型", () => {
-  assert.equal(allModels().length, 8);
+test("只列接口真的返回过的模型：u1.5-fast 不在清单里", () => {
+  // 文档有它，但 /v1/models 从来没返回过 —— 列一个请求必然失败的 id 没有意义。
+  const ids = allModels().map((m) => m.id);
+  assert.equal(ids.includes("sensenova-u1.5-fast"), false);
+  assert.equal(allModels().length, 7);
   assert.equal(chatModels().length, 6);
   assert.equal(chatModels().some((m) => m.outputModalities.includes("image")), false);
 });

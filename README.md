@@ -12,7 +12,7 @@ sensenova  通用积分池 · 5 小时窗口  0% used ↻ 2h  ·  Flash-Lite积�
 
 三句话概括它做了什么：
 
-- **模型**是内置清单：文档总览里的六个对话模型 + 两个生图模型，显示名用文档里的真名，启动时不打任何接口；
+- **模型**是内置清单：六个对话模型 + 一个生图模型，显示名用文档里的真名，启动时不打任何接口；
 - **额度**把控制台的积分池上报成 Magpie 原生的额度窗口，出现在账号行和 `magpie quota`；
 - **两套凭据**：模型用 API Key，额度用控制台令牌 —— 平台没有可用 API Key 读额度的接口，所以两者必须分开收集。
 
@@ -121,7 +121,7 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 ## 三、模型
 
-清单**写死在 `models.mjs`**，就是官方文档[模型总览](https://platform.sensenova.cn/docs)列的那 8 个模型（六个对话 + 两个生图），顺序也一致：
+清单**写死在 `models.mjs`**，就是官方文档[模型总览](https://platform.sensenova.cn/docs)列出的、且接口确实在提供的 7 个模型（六个对话 + 一个生图），顺序也一致：
 
 | 模型 | Model ID | 上下文 | 输出上限 | 输入 |
 | --- | --- | --- | --- | --- |
@@ -132,9 +132,10 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 | GLM-5.2 | `glm-5.2` | 1,048,576 | 131,072 | 文本 |
 | Kimi K3 | `kimi-k3` | 1,048,576 | 65,536 | 文本 |
 | SenseNova U1.5 Lite | `sensenova-u1.5-lite` | 262,144 | 65,536 | 文本 → **图片** |
-| SenseNova U1.5 Fast | `sensenova-u1.5-fast` | — | — | 文本 → **图片** |
 
-名字和 id 以文档为准，数值以 `GET /v1/models` 的实测快照（2026-11-02）为准 —— 那几个数才是接口真正执行的。`sensenova-u1.5-fast` 是唯一的例外：文档里有它，接口至今没返回过，所以没有可抄的数字，留空走保守默认值，不编。
+名字和 id 以文档为准，数值以 `GET /v1/models` 的实测快照（2026-11-02）为准 —— 那几个数才是接口真正执行的。
+
+文档里还有个 `sensenova-u1.5-fast`，**清单里没有它**：`/v1/models` 至今没返回过这个 id，没有参数可抄；而列一个请求必然失败的模型，比少列一个更糟。等接口给了再加。
 
 `config` 钩子与 `provider.models` 钩子都从同一份清单生成，所以**登录前就能看到模型**，`magpie plugin --json` 也列得出来。
 
@@ -152,7 +153,7 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 ### 生图模型怎么走
 
-两个生图模型（`output_modalities: ["image"]`）和对话模型一起声明，走同一台主机上的 `POST /v1/images/generations`（OpenAI 形状的 `prompt` / `n` / `size` / `output_format` / `response_format`）。插件的 `fetch` 只换 `authorization` 头、其余原样转发，所以这条路不需要额外代码：
+生图模型（`output_modalities: ["image"]`）和对话模型一起声明，走同一台主机上的 `POST /v1/images/generations`（OpenAI 形状的 `prompt` / `n` / `size` / `output_format` / `response_format`）。插件的 `fetch` 只换 `authorization` 头、其余原样转发，所以这条路不需要额外代码：
 
 ```
 POST https://token.sensenova.cn/v1/images/generations
@@ -366,8 +367,8 @@ magpie plugin options sensenova '{"locale":"en"}'
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一条错误，**仅此而已**：额度不显示，模型调用照常，账号也不会被标记为需重新登录（见[额度失败不能连累账号](#额度失败不能连累账号)）。
 - **续期到的控制台令牌只存在内存里。** 重启 Magpie 后第一次读额度会重新登录一次控制台。这是有意的：提示里输入的账号密码不该被插件另存一份到磁盘（走 `~/.sensenova-quota.json` 的那条路本来就会写回该文件）。
 - 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
-- 清单里的条目若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入）；目前只有 `sensenova-u1.5-fast` 属于这种没数据可抄的情形。
-- **`sensenova-u1.5-fast` 没有实测参数。** 文档里有这个 id，`/v1/models` 至今不返回它，所以清单里它的上下文/输出上限是保守默认值。第一次真请求若被拒，会按下面的规则从该账号列表里消失。
+- 清单里的条目若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入）；目前 7 个条目都写全了。
+- **`sensenova-u1.5-fast` 没进清单。** 文档里有这个 id，`/v1/models` 至今不返回，没有参数可抄，所以不列 —— 不然选择器里就是一个点了必然失败的模型。
 
 ---
 
@@ -579,7 +580,7 @@ node --test test/*.test.mjs
 - 字段缺失时的降级；JWT 过期判断；refresh token 续期；无凭据时报出的错误；
 - `fetch` 钩子在 `(url, init)` 与 `Request` 两种入参下都保住 body 和 headers；
 - `__` 前缀的内部键不会写进凭据文件；
-- 静态清单本身（id 集合与顺序、显示名是「DeepSeek V4.1 Flash」而不是 id、`deepseek-v4.1-flash` 不在清单里、两个生图模型在清单里且只有 u1.5-lite 带实测参数、生图不算对话模型、每个模型的上下文与输出上限）；
+- 静态清单本身（id 集合与顺序、显示名是「DeepSeek V4.1 Flash」而不是 id、`deepseek-v4.1-flash` 不在清单里、生图模型在清单里且参数逐项抄自接口、`u1.5-fast` 被排除、生图不算对话模型、每个模型的上下文与输出上限）；
 - 字段口径（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字）；
 - 模型声明不发任何请求（`config` 与 `provider.models` 都来自同一份清单），且登录前就能列出；
 - 生图模型的 `capabilities.output.image` 为真、对话模型为假 —— 宿主靠这一位决定发去 images 还是 chat；
