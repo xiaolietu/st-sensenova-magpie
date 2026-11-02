@@ -85,13 +85,22 @@ test("不在文档总览里的幽灵 id 不会出现在清单里", () => {
   assert.equal(ids.includes("deepseek-flash"), true);
 });
 
-test("生图模型不在清单里：Magpie 没有生图通道，留着只会写错", () => {
-  // 实测：u1.5-fast 已从 /v1/models 消失，u1.5-lite 的上限与文档不一致。
-  // 既然这两个模型永远不可能被这个供应商提供，就不写进清单。
-  const ids = allModels().map((m) => m.id);
-  assert.equal(ids.includes("sensenova-u1.5-lite"), false);
-  assert.equal(ids.includes("sensenova-u1.5-fast"), false);
-  assert.equal(allModels().length, chatModels().length);
+test("两个生图模型也在清单里，但只有 u1.5-lite 有实测参数", () => {
+  const by = Object.fromEntries(allModels().map((m) => [m.id, m]));
+  assert.deepEqual(by["sensenova-u1.5-lite"].outputModalities, ["image"]);
+  // 参数逐项抄自 /v1/models：上下文 262144、输出 65536、纯文本输入
+  assert.equal(by["sensenova-u1.5-lite"].contextLength, 262144);
+  assert.equal(by["sensenova-u1.5-lite"].maxCompletionTokens, 65536);
+  assert.deepEqual(by["sensenova-u1.5-lite"].inputModalities, ["text"]);
+
+  // 文档里有这个 id，但接口从未返回过它，所以不编数字，走保守默认值
+  assert.equal(by["sensenova-u1.5-fast"].contextLength, 131072);
+  assert.equal(by["sensenova-u1.5-fast"].maxCompletionTokens, 32768);
+});
+
+test("生图模型不算对话模型", () => {
+  assert.equal(allModels().length, 8);
+  assert.equal(chatModels().length, 6);
   assert.equal(chatModels().some((m) => m.outputModalities.includes("image")), false);
 });
 

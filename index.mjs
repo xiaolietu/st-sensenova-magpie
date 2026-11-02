@@ -26,7 +26,7 @@
  */
 
 import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, readAuth } from "./internal.mjs";
-import { DEFAULT_BASE_URL, NPM, chatModels, toConfigModel, toProviderModel } from "./models.mjs";
+import { DEFAULT_BASE_URL, NPM, allModels, toConfigModel, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -295,7 +295,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         npm: NPM,
         api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
-        models: Object.fromEntries(chatModels().map((m) => [m.id, toConfigModel(m)])),
+        models: Object.fromEntries(allModels().map((m) => [m.id, toConfigModel(m)])),
       };
     },
 
@@ -308,10 +308,12 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
        * upstream has already refused for *this* account with `not available in
        * the current token plan`. The list is per plan, and the static one is
        * per platform — a Free account and a paid one get different subsets of
-       * the same six models, and the only signal either way is the refusal.
+       * the same catalogue, and the only signal either way is the refusal.
        *
-       * Image-creation models never reach here; `chatModels()` drops them
-       * because this provider speaks chat completions only.
+       * Image models are included. Their `capabilities.output.image` tells
+       * Magpie which endpoint they belong to, and the request they produce
+       * (`POST {baseURL}/images/generations`) is forwarded by the `fetch` hook
+       * like any other.
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
@@ -319,7 +321,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         const key = apiKeyOf(auth);
         const blocked = (key && refusedModels.get(key)) || null;
         return Object.fromEntries(
-          chatModels()
+          allModels()
             .filter((m) => !blocked || !blocked.has(m.id))
             .map((m) => [m.id, toProviderModel(m, id, { baseURL })])
         );

@@ -185,24 +185,28 @@ test("模型清单是静态的：不登录也有模型，且不发任何请求",
   try {
     const plugin = await SenseNovaPlugin({}, {});
     const models = await plugin.provider.models({}, { auth: { type: "api", key: "sk-1" } });
-    assert.equal(Object.keys(models).length, 6);
+    assert.equal(Object.keys(models).length, 8, "六个对话 + 两个生图");
     assert.equal(models["deepseek-flash"].id, "deepseek-flash");
     assert.equal(models["deepseek-flash"].api.url, "https://token.sensenova.cn/v1");
+    // 生图模型靠 capabilities.output.image 让宿主把它发到 /images/generations
+    assert.equal(models["sensenova-u1.5-lite"].capabilities.output.image, true);
+    assert.equal(models["sensenova-u1.5-lite"].capabilities.output.text, false);
+    assert.equal(models["deepseek-flash"].capabilities.output.image, false);
     assert.equal(calls, 0, "声明模型不该打任何接口");
   } finally {
     globalThis.fetch = real;
   }
 });
 
-test("config 钩子一并声明这六个模型，登录前就能列出", async () => {
+test("config 钩子一并声明完整清单，登录前就能列出", async () => {
   const plugin = await SenseNovaPlugin({}, {});
   const cfg = {};
   await plugin.config(cfg);
   const declared = cfg.provider.sensenova.models;
-  assert.equal(Object.keys(declared).length, 6);
+  assert.equal(Object.keys(declared).length, 8);
   assert.equal(declared["deepseek-flash"].name, "DeepSeek V4.1 Flash");
   assert.equal(declared["glm-5.2"].limit.output, 131072);
-  assert.equal(declared["sensenova-u1.5-lite"], undefined, "生图模型不该被声明");
+  assert.deepEqual(declared["sensenova-u1.5-lite"].modalities.output, ["image"]);
 });
 
 test("locale: en 让窗口标签、单位和余额都变英文", async () => {

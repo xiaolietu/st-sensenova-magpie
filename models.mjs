@@ -3,9 +3,9 @@
  *
  * **Where the list comes from.** The 模型总览 table in the official docs
  * (https://platform.sensenova.cn/docs) decides which models exist and what
- * they are called; the numbers (`context_length` / `max_output_length` /
- * modalities / `supported_features`) come from a `GET /v1/models` snapshot
- * taken 2026-11-02, because those are the values the chat endpoint enforces.
+ * they are called; every number (`context_length` / `max_output_length` /
+ * modalities / `supported_features`) is copied from `GET /v1/models` instead
+ * of being guessed, because those are the values the endpoints enforce.
  * The docs and that endpoint disagree in two places — noted on the entries
  * below — and where they do, the endpoint wins: it is the one answering the
  * request.
@@ -54,18 +54,19 @@ const DEFAULT_OUTPUT = 32768;
 const FULL = ["tools", "json_mode", "reasoning"];
 
 /**
- * The chat models from the docs' 模型总览, in that page's order.
+ * Every model the docs' 模型总览 lists, in that page's order: six chat models
+ * then the two image-creation ones.
  *
- * The two image-creation models (`sensenova-u1.5-lite`, `sensenova-u1.5-fast`)
- * are deliberately absent: Magpie's plugin system has no image-generation
- * channel, so they could never be offered, and keeping unusable entries costs
- * accuracy — checked against the live endpoint on 2026-11-02, `u1.5-fast` was
- * already gone from `/v1/models` and `u1.5-lite` reported different limits
- * than the docs. A list of what this provider can actually serve beats a
- * list of what the platform happens to have.
+ * The image models are declared like the rest and served by the same host
+ * (`POST /v1/images/generations`, an OpenAI-shaped `prompt` / `n` / `size`
+ * request), so the provider's `fetch` forwards them untouched once Magpie
+ * routes them there — it recognises an image model and does not send it to
+ * `chat/completions` (`an image model: asked on the images API, not here`).
  *
- * `isChatModel()` still guards the boundary, so pasting an image entry back in
- * cannot leak it to the picker.
+ * Two entries carry different provenance and say so: `sensenova-u1.5-lite`
+ * has measured limits from `/v1/models`, while `sensenova-u1.5-fast` is in the
+ * docs but not in that response, so it gets no invented numbers. `isChatModel()`
+ * stays as the boundary between the two families.
  */
 const CATALOG = [
   {
@@ -123,6 +124,27 @@ const CATALOG = [
     max_output_length: 65536,
     input_modalities: ["text"],
     output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    // 参数逐项取自 /v1/models（2026-11-02）：上下文 262144、输出 65536、纯文本
+    // 输入。接口对生图模型同样报 tools/json_mode/reasoning，照它的原样写，
+    // 不替平台做判断。
+    id: "sensenova-u1.5-lite",
+    name: "SenseNova U1.5 Lite",
+    context_length: 262144,
+    max_output_length: 65536,
+    input_modalities: ["text"],
+    output_modalities: ["image"],
+    supported_features: FULL,
+  },
+  {
+    // 文档里有（model_id 也是这个），但 /v1/models 至今没返回过它，所以没有
+    // 可抄的参数，就不编：留空走保守默认值，等接口给了再补。
+    id: "sensenova-u1.5-fast",
+    name: "SenseNova U1.5 Fast",
+    input_modalities: ["text"],
+    output_modalities: ["image"],
     supported_features: FULL,
   },
 ];
