@@ -54,12 +54,18 @@ const DEFAULT_OUTPUT = 32768;
 const FULL = ["tools", "json_mode", "reasoning"];
 
 /**
- * Every model the docs' 模型总览 lists, in that page's order.
+ * The chat models from the docs' 模型总览, in that page's order.
  *
- * The image-creation models are kept so this stays a description of the
- * platform rather than of this provider, and are filtered out by
- * `chatModels()`: Magpie's plugin system has no image-generation channel, and
- * posting those ids to `/v1/chat/completions` only earns a 404.
+ * The two image-creation models (`sensenova-u1.5-lite`, `sensenova-u1.5-fast`)
+ * are deliberately absent: Magpie's plugin system has no image-generation
+ * channel, so they could never be offered, and keeping unusable entries costs
+ * accuracy — checked against the live endpoint on 2026-11-02, `u1.5-fast` was
+ * already gone from `/v1/models` and `u1.5-lite` reported different limits
+ * than the docs. A list of what this provider can actually serve beats a
+ * list of what the platform happens to have.
+ *
+ * `isChatModel()` still guards the boundary, so pasting an image entry back in
+ * cannot leak it to the picker.
  */
 const CATALOG = [
   {
@@ -79,24 +85,6 @@ const CATALOG = [
     input_modalities: ["text", "image"],
     output_modalities: ["text"],
     supported_features: FULL,
-  },
-  {
-    id: "sensenova-u1.5-lite",
-    name: "SenseNova U1.5 Lite",
-    context_length: 32768,
-    max_output_length: 4096,
-    input_modalities: ["text", "image"],
-    output_modalities: ["image"],
-    supported_features: [],
-  },
-  {
-    id: "sensenova-u1.5-fast",
-    name: "SenseNova U1.5 Fast",
-    context_length: 32768,
-    max_output_length: 4096,
-    input_modalities: ["text", "image"],
-    output_modalities: ["image"],
-    supported_features: [],
   },
   {
     id: "deepseek-v4-flash",

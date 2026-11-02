@@ -148,11 +148,12 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 改 `models.mjs` 的 `CATALOG`，改 `package.json` 的版本号，跑 `node --test test/*.test.mjs`。测试把 id 集合、显示名、以及「生图模型不进对话模型」都钉死了，随手改会立刻失败。
 
-### 对话模型与图像模型
+### 为什么不列生图模型
 
-清单里保留了平台的两个生图模型（`sensenova-u1.5-lite`、`sensenova-u1.5-fast`，`output_modalities: ["image"]`），但**不会出现在 Magpie 里** —— 它们走 `/v1/images/generations`，实测发给 `/v1/chat/completions` 只会得到 404 `model is not found`。保留它们是为了让这份清单描述的是平台，而不是这个供应商摘出来的一半。
+平台还有两个生图模型（`sensenova-u1.5-lite`、`sensenova-u1.5-fast`，`output_modalities: ["image"]`），**清单里没有它们**。两个原因：
 
-> 为什么图像模型不能接：Magpie 的插件体系没有生图通道。npm 到 API 的映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions）；模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
+- Magpie 的插件体系没有生图通道。npm 到 API 的映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions）；模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。写多少调用 `/v1/images/generations` 的代码都不会有钩子触发。
+- 留着它们就得把数字写对，而这份清单的第一版正是在这里出错：`u1.5-lite` 的上下文/输出上限按印象填成了 32768/4096，实测是 262144/65536；`u1.5-fast` 更是已经从 `/v1/models` 里消失。**一个永远用不上的条目，多写一个字段就多一个写错的地方。** 现在 `isChatModel()` 仍留在代码里当边界，把生图条目贴回清单也不会漏到选择器。
 
 ### 清单是平台级的，套餐是账号级的
 
@@ -350,6 +351,7 @@ magpie plugin options sensenova '{"locale":"en"}'
 ## 六、已知限制
 
 - **默认每个账号只跑 1 个请求。** 平台限流阈值极低（同一秒的第二个请求就 429），插件因此在 `package.json` 里声明 `maxConcurrency: 1`。代价是多个 agent 同时干活时会排队；账号页下拉手动改成 2/3/5/10 或「不限制」即可，用户的选择优先。
+- **429 是间歇的，不是模型坏了。** 实测六个模型**全部可通**（2026-11-02，同一账号逐个单发）：`sensenova-6.8-flash`、`sensenova-6.8-flash-lite`、`deepseek-flash`、`kimi-k3` 直接 200；`deepseek-v4-flash` 和 `glm-5.2` 第一次 429，按 30 秒间隔连发三次得到 `429 → 200 → 429` —— 阈值低且随窗口滑动恢复。所以插件不拦截、不改写 429，交给 Magpie 做故障切换；把 429 吞掉反而会拆掉它的容错。
 - **清单是静态的，平台发新模型要跟一次版本。** 好处是稳定，代价是新模型不会自己冒出来。另外清单是平台级的，套餐是账号级的：**被上游以「不在当前套餐」拒过的 id 会被记住，并从该账号的列表里移除**（见[清单是平台级的，套餐是账号级的](#清单是平台级的套餐是账号级的)），所以通常只会撞一次。
 - **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
@@ -569,7 +571,7 @@ node --test test/*.test.mjs
 - 字段缺失时的降级；JWT 过期判断；refresh token 续期；无凭据时报出的错误；
 - `fetch` 钩子在 `(url, init)` 与 `Request` 两种入参下都保住 body 和 headers；
 - `__` 前缀的内部键不会写进凭据文件；
-- 静态清单本身（id 集合与顺序、显示名是「DeepSeek V4.1 Flash」而不是 id、`deepseek-v4.1-flash` 不在清单里、生图模型留在清单但不进对话模型、每个模型的上下文与输出上限）；
+- 静态清单本身（id 集合与顺序、显示名是「DeepSeek V4.1 Flash」而不是 id、`deepseek-v4.1-flash` 不在清单里、生图模型不在清单里、每个模型的上下文与输出上限）；
 - 字段口径（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字）；
 - 模型声明不发任何请求（`config` 与 `provider.models` 都来自同一份清单），且登录前就能列出；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；

@@ -85,14 +85,14 @@ test("不在文档总览里的幽灵 id 不会出现在清单里", () => {
   assert.equal(ids.includes("deepseek-flash"), true);
 });
 
-test("生图模型留在清单里，但不进对话模型", () => {
+test("生图模型不在清单里：Magpie 没有生图通道，留着只会写错", () => {
+  // 实测：u1.5-fast 已从 /v1/models 消失，u1.5-lite 的上限与文档不一致。
+  // 既然这两个模型永远不可能被这个供应商提供，就不写进清单。
   const ids = allModels().map((m) => m.id);
-  assert.equal(ids.includes("sensenova-u1.5-lite"), true, "它确实是平台上的模型");
-  assert.equal(ids.includes("sensenova-u1.5-fast"), true);
-  assert.equal(
-    chatModels().some((m) => m.outputModalities.includes("image")),
-    false
-  );
+  assert.equal(ids.includes("sensenova-u1.5-lite"), false);
+  assert.equal(ids.includes("sensenova-u1.5-fast"), false);
+  assert.equal(allModels().length, chatModels().length);
+  assert.equal(chatModels().some((m) => m.outputModalities.includes("image")), false);
 });
 
 test("上下文与输出上限按接口口径写死在条目里", () => {
