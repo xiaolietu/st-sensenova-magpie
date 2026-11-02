@@ -33,6 +33,26 @@ import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 const DEFAULT_QUOTA_TTL_MS = 60_000;
 
 /**
+ * How long a failed quota read waits before being retried, doubling each time.
+ *
+ * The old behaviour retried 15 seconds after a failure. When the console
+ * credentials are a username and password the user typed at sign-in, every
+ * retry is a complete OAuth password login, so a single bad refresh token
+ * turns into four logins a minute — which is what makes IAM start answering
+ * 403. One minute, doubling, is fast enough for a transient blip and slow
+ * enough to look like a browser tab.
+ *
+ * A failure the whole renewal chain produced (`kind: "auth"`, i.e. the console
+ * login itself was refused) backs off much further. That state does not heal
+ * on its own — it heals when the user signs in again — so retrying it every
+ * quarter of an hour is pure noise and, if IAM is rate-limiting, keeps the
+ * account locked.
+ */
+const RETRY_BASE_MS = 60_000;
+const RETRY_MAX_MS = 15 * 60_000;
+const RETRY_AUTH_MAX_MS = 2 * 60 * 60_000;
+
+/**
  * Build the plugin.
  *
  * @param {{client?: object}} input - the plugin input the host passes.
@@ -59,6 +79,31 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
   };
 
   /**
+   * Console tokens minted during this run, per account.
+   *
+   * Without this, `credentialsFor` rebuilds the credentials from disk on every
+   * poll, so a token that was just renewed is thrown away and the next poll
+   * renews again — and when the account was typed at sign-in there is no file
+   * to write to, so "renew" means a full password login through IAM. That is
+   * one complete OAuth login per `quotaTtlMs` (or per retry), which the IAM
+   * eventually answers with 403 and Magpie reads as "the sign-in was rejected".
+   *
+   * In memory only: writing credentials the user only typed into a prompt to
+   * disk is the `snquota` file's job, not this plugin's.
+   */
+  const tokenCache = new Map();
+
+  /** Keep a renewed token so the next poll starts from it instead of from disk. */
+  const rememberTokens = (key, cfg) => {
+    tokenCache.set(key, {
+      access_token: cfg.access_token,
+      refresh_token: cfg.refresh_token,
+      id_token: cfg.id_token,
+      expires_at: cfg.expires_at,
+    });
+  };
+
+  /**
    * The credential pair for one account.
    *
    * The console credentials come from the sign-in prompts when the user
@@ -67,21 +112,24 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
    * the CLI already drives, including keeping the token fresh; asking for the
    * same account twice would be worse than reusing that file.
    */
-  const credentialsFor = (auth) => {
+  const credentialsFor = (auth, cacheKey) => {
     const fromAuth = consoleAuthOf(auth);
     const fromFile = readCredentials(opts.credentialsFile) ?? {};
+    // A token renewed during this run outranks the file: it is the newest one
+    // this process has, and for a prompted account it is the only one.
+    const remembered = (cacheKey && tokenCache.get(cacheKey)) || {};
     return {
       base: fromFile.base,
       client_id: fromFile.client_id,
       redirect_uri: fromFile.redirect_uri,
-      access_token: fromFile.access_token,
-      refresh_token: fromFile.refresh_token,
+      access_token: remembered.access_token ?? fromFile.access_token,
+      refresh_token: remembered.refresh_token ?? fromFile.refresh_token,
       // Kept so `accountNameOf` can still name the account when the access
       // token is opaque rather than a JWT. `applyToken` writes this back to
       // the file, so dropping it here would make the stored copy dead weight
       // and lose the name on the next start.
-      id_token: fromFile.id_token,
-      expires_at: fromFile.expires_at,
+      id_token: remembered.id_token ?? fromFile.id_token,
+      expires_at: remembered.expires_at ?? fromFile.expires_at,
       cookie: fromAuth.cookie ?? fromFile.cookie,
       username: fromAuth.username ?? fromFile.username,
       password: fromAuth.password ?? fromFile.password,
@@ -93,7 +141,14 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
     };
   };
 
-  /** Cache quota per account so a polled hook costs one request a minute. */
+  /**
+   * Cache quota per account so a polled hook costs one request a minute.
+   *
+   * `nextAt` is when this account may be read again, and `streak` counts
+   * consecutive failures so the wait can double. A success resets the streak;
+   * a failure keeps serving the last error to every poll until `nextAt`, which
+   * is what keeps a broken console login from being retried on every tick.
+   */
   const quotaCache = new Map();
 
   /**
@@ -112,18 +167,25 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
   const quotaFor = async (getAuth) => {
     const auth = await readAuth(getAuth);
     const cacheKey = apiKeyOf(auth) ?? consoleAuthOf(auth).username ?? "sensenova";
+    const now = Date.now();
     const hit = quotaCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < opts.quotaTtlMs) return hit.value;
+    if (hit && now < hit.nextAt) return hit.value;
 
-    const cfg = credentialsFor(auth);
+    const cfg = credentialsFor(auth, cacheKey);
     if (!cfg.access_token && !cfg.refresh_token && !cfg.cookie && !cfg.password) {
-      const value = { error: t.noAccount };
-      quotaCache.set(cacheKey, { at: Date.now(), value });
+      // `signIn: "kept"`: this is a missing-console-credentials problem, not a
+      // rejected sign-in. Without it Magpie reads the message (which mentions
+      // signing in) as "the account needs to log in again", marks the account,
+      // and stops routing model requests through it — a quota read that only
+      // decorates the account row would take the whole provider down.
+      const value = { error: t.noAccount, signIn: "kept" };
+      quotaCache.set(cacheKey, { nextAt: Date.now() + opts.quotaTtlMs, streak: 0, value });
       return value;
     }
 
     try {
       const { quota, changed } = await readQuota(cfg, { scopeModel: opts.scopeModel, strings: t });
+      if (changed) rememberTokens(cacheKey, cfg);
       if (changed && cfg.__writable) writeCredentials(cfg, cfg.__file);
       // 套餐名用接口给的（实际是 "Free Plan"），拿不到才退回通用叫法。
       const { plan, ...rest } = quota;
@@ -133,18 +195,35 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         ...(user ? { user } : {}),
         ...rest,
       };
-      quotaCache.set(cacheKey, { at: Date.now(), value });
+      quotaCache.set(cacheKey, { nextAt: Date.now() + opts.quotaTtlMs, streak: 0, value });
       return value;
     } catch (error) {
+      // A rejected or unreachable console token says nothing about the API
+      // key that actually serves model requests, so every failure here is
+      // reported with `signIn: "kept"` — see the note above.
+      const authFailed = error instanceof QuotaError && error.kind === "auth";
+      // A token the console refused is worse than useless: keeping it would
+      // make the next attempt fail the same way without ever re-deriving the
+      // credentials from the file (or from the password) they came from.
+      if (authFailed) tokenCache.delete(cacheKey);
+
       // A failed read must not be cached for the full TTL: the next poll is
-      // exactly when a token that just expired should be retried.
+      // exactly when a token that just expired should be retried. It must not
+      // be retried hot either — a broken console login hammered every 15s is
+      // what makes IAM answer 403 in the first place, so the wait doubles and
+      // caps out at RETRY_MAX_MS (RETRY_AUTH_MAX_MS when the login itself is
+      // what failed).
+      const streak = (hit?.streak ?? 0) + 1;
+      const cap = authFailed ? RETRY_AUTH_MAX_MS : RETRY_MAX_MS;
+      const wait = Math.min(RETRY_BASE_MS * 2 ** (streak - 1), cap);
       const user = accountLabel(cfg);
       const value = {
         plan: t.planFallback,
         ...(user ? { user } : {}),
         error: error instanceof QuotaError ? error.message : fill(t.readFailed, { detail: error.message }),
+        signIn: "kept",
       };
-      quotaCache.set(cacheKey, { at: Date.now() - opts.quotaTtlMs + 15_000, value });
+      quotaCache.set(cacheKey, { nextAt: Date.now() + wait, streak, value });
       log("warn", `sensenova: quota read failed: ${error.message}`);
       return value;
     }

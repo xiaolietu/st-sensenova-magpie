@@ -40,7 +40,9 @@ const ZH = {
   chainStuck: "登录跳转链在 {where} 停住了",
   bouncedToLogin: "登录后又被踢回登录页，账号密码可能不对",
   chainTooLong: "登录跳转次数超出上限",
-  loginRejected: "登录被拒绝（HTTP {status}）",
+  // 措辞刻意点明「控制台」和「仅影响额度」：这句话只出现在额度窗口里，
+  // 读起来不能像「Magpie 账号要重新登录」，否则用户会去重登 API Key。
+  loginRejected: "控制台账号登录被拒绝（HTTP {status}），仅影响额度显示",
   quotaHttp: "读取额度失败 HTTP {status}",
   noRenewalPath: "access_token 已过期，且没有 refresh_token / 会话 cookie / 账号密码可用。请运行 snquota login 重新登录。",
 
@@ -79,7 +81,7 @@ const EN = {
   chainStuck: "The sign-in redirect chain stopped at {where}",
   bouncedToLogin: "Bounced back to the sign-in page after signing in; the account or password may be wrong",
   chainTooLong: "The sign-in redirect chain exceeded its hop limit",
-  loginRejected: "Sign-in refused (HTTP {status})",
+  loginRejected: "The console refused the account sign-in (HTTP {status}); only the quota is affected",
   quotaHttp: "Reading the quota failed with HTTP {status}",
   noRenewalPath: "The access_token has expired and there is no refresh_token, session cookie, or account password to renew it with. Run snquota login to sign in again.",
 

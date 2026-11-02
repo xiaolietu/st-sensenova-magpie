@@ -476,7 +476,12 @@ export async function fetchPoolUsage(cfg, { fetchImpl = fetch, strings } = {}) {
   }
   if (!res.ok) {
     const reason = data?.details?.find?.((d) => typeof d?.message === "string")?.message;
-    throw new QuotaError(`${fill(t.quotaHttp, { status: res.status })}${reason ? ` ${reason}` : ""}`);
+    // 401 是「这枚 token 不认」，调用方据此丢掉缓存的令牌重新续期；其余状态码
+    // （403 权限、5xx 故障）和令牌本身无关，扔掉令牌只会白白多一次登录。
+    throw new QuotaError(
+      `${fill(t.quotaHttp, { status: res.status })}${reason ? ` ${reason}` : ""}`,
+      res.status === 401 ? "auth" : "quota"
+    );
   }
   return {
     plan: data?.plan ?? null,
