@@ -117,6 +117,16 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 遇到 429 先看日志里的 code：`BurstRate` 等几秒重试，其余三种换模型比等更划算。
 
+**同一时段的可用性**（2026-11-02 22:47–23:05，每 25 秒打一次点，`max_tokens=1`）：
+
+| 模型 | 成功 | 失败码 |
+| --- | --- | --- |
+| `deepseek-flash` | **1/20（5%）** | `EndpointRPMExceeded`×17、`EndpointTPMExceeded`×3 |
+| `deepseek-v4-flash` | 3/12（25%） | `insufficient_quota`×9 |
+| `sensenova-6.8-flash` | **6/6（100%）** | — |
+
+第三方模型在高峰时段基本不可用，且**不是按固定节拍恢复** —— 那次唯一的成功出现在第 77 秒，之后 7 分钟没有任何一次通过。想稳定用就换 SenseNova 自家的模型。
+
 **403 `model is not available in the current token plan`。** 套餐不含这个模型。插件会把这个 id 从该账号的列表里移除（按 Key 记、只在内存），所以只会撞一次。
 
 **账号行显示「操作过于频繁」或「登录被拒绝」。** 是控制台那次密码登录被 IAM 限流了，只影响额度，模型照常。把账号密码两项留空、只保留 API Key，就不会再碰控制台接口。
