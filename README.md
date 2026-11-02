@@ -67,10 +67,14 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 | 池 | 5 小时窗口 | 周窗口 | 覆盖模型 |
 | --- | --- | --- | --- |
-| 通用积分池 | 120,000 | 1,200,000 | 除 Flash-Lite 外全部 |
-| Flash-Lite 专属积分池 | 60,000 | 600,000 | `sensenova-6.8-flash-lite` 等 |
+| 通用积分池 | 120,000 | 1,200,000 | 「所有 Free 模型」 |
+| Flash-Lite 专属积分池 | 120,000 | 1,200,000 | 仅 Flash-Lite 系列 |
+
+（控制台 2026-11-02 的实际数值。文档里专属池仍写 60,000 / 600,000，已过时。）
 
 专属池用完后会自动回落到通用池扣，和平台规则一致。额度是**账户级**的：同一账户下所有 API Key 共享同一个池，加两个 Key 会显示同样的数字。
+
+积分消耗很慢：累计几十次探测请求只让 5 小时窗口掉了 **4.9 积分**（119,995.12 / 120,000）。所以「额度」几乎不会是瓶颈，真被限的时候去看看 `error.code`。
 
 额度只出现在三处：账号行、`magpie quota`、`GET /v1/magpie/quotas`。Magpie 的插件系统不允许新增面板，也进不了用量概览页。
 
@@ -107,9 +111,11 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 | `Throttling.BurstRate` | 瞬时突发太快 | ✅ 隔几秒 |
 | `RateLimitExceeded.EndpointRPMExceeded` | 端点级 RPM，不按账号算 | ❌ 静默 5 分钟仍 429 |
 | `ModelAccountRpmRateLimitExceeded` | 模型维度的账户 RPM | ❌ 静默 2 分钟仍 429 |
-| `insufficient_quota` | 该模型的额度用完了 | ❌ 要等额度回补 |
+| `insufficient_quota` | 该模型当前**可分配额度为 0**（与积分余额无关） | ❌ 等它恢复，实测约 20 分钟 |
 
-前三行和「额度」无关，只有最后一行是。遇到 429 先看日志里的 code，再判断是等一等、换模型，还是去控制台看积分明细。
+**这四种都跟「积分够不够」无关。** 实测 429 密集出现的那段时间，控制台通用池仍显示 119,995 / 120,000（100% 可用）。`insufficient_quota` 指的是**该模型这一层**拿不到额度，不是账户积分不足 —— 遇到它不要以为要充值，等它自己恢复，或者换模型。
+
+遇到 429 先看日志里的 code：`BurstRate` 等几秒重试，其余三种换模型比等更划算。
 
 **403 `model is not available in the current token plan`。** 套餐不含这个模型。插件会把这个 id 从该账号的列表里移除（按 Key 记、只在内存），所以只会撞一次。
 

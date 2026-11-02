@@ -518,7 +518,7 @@ export async function fetchPoolUsage(cfg, { fetchImpl = fetch, strings } = {}) {
  *
  * **`amount` 是关键**：Magpie 的界面按「已用 / 配额」渲染，并且有一个
  * 「已用 | 剩余」的切换，两边都从 `amount` 算。只给 `used` 不给 `amount`
- * 的话，百分比是对的，数量却会显示成 0 —— 界面上看起来就是「0 / 600,000」，
+ * 的话，百分比是对的，数量却会显示成 0 —— 界面上看起来就是「0 / 120,000」，
  * 和真实余额完全对不上。这个字段没有出现在公开文档的窗口字段列表里，是从
  * workbuddy / zcode 两个社区插件的实现里对出来的。
  *
