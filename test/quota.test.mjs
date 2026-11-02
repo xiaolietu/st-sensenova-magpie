@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { extractModels, normalizeModel, toConfigModel, toProviderModel } from "../models.mjs";
+import { normalizeModel, toConfigModel, toProviderModel } from "../models.mjs";
 import { strings } from "../i18n.mjs";
 import {
   accountNameOf,
@@ -220,19 +220,11 @@ test("IAM 的失败原因大小写不固定，不能因此退化成「登录被�
   );
 });
 
-test("ensureToken 在没有凭据时抛出可读错误", async () => {  await assert.rejects(
+test("ensureToken 在没有凭据时抛出可读错误", async () => {
+  await assert.rejects(
     () => ensureToken({ access_token: "stale", expires_at: 1 }, { fetchImpl: async () => new Response("{}") }),
     (e) => e instanceof QuotaError && /snquota login/.test(e.message)
   );
-});
-
-test("normalizeModel 容忍 OpenAI 与裸数组两种信封", () => {
-  const rows = extractModels({ data: [{ id: "a" }, { model_id: "b", context_length: 200000 }] });
-  assert.deepEqual(rows.map((m) => m.id), ["a", "b"]);
-  assert.equal(rows[1].contextLength, 200000);
-  assert.deepEqual(extractModels([{ id: "c" }]).map((m) => m.id), ["c"]);
-  assert.deepEqual(extractModels({ models: [{ id: "d" }] }).map((m) => m.id), ["d"]);
-  assert.deepEqual(extractModels({ nope: 1 }), []);
 });
 
 test("normalizeModel 给未知模型兜底，没有 id 的条目被丢掉", () => {

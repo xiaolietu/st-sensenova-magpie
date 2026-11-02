@@ -1,17 +1,17 @@
 /**
- * Tests for the `GET /v1/models` normalizer.
+ * Tests for the static catalogue and the Magpie object shapes built from it.
  *
- * The fixtures are the shapes the platform's own documentation publishes, so a
- * rename on their side shows up here as a failing test rather than as a
- * silently empty model list at runtime.
+ * The list itself is pinned deliberately: a model got dropped, renamed or
+ * reordered by an edit that did not mean to is exactly the kind of change that
+ * silently breaks someone's agent, and it is invisible without a test.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  createCatalog,
-  extractModels,
+  allModels,
+  chatModels,
   isChatModel,
   normalizeModel,
   toConfigModel,
@@ -52,6 +52,73 @@ const IMAGE_MODEL = {
   supported_features: [],
 };
 
+/* ------------------------------------------------------------- the catalogue */
+
+test("catalogue 就是文档模型总览里的那六个对话模型，顺序一致", () => {
+  assert.deepEqual(
+    chatModels().map((m) => m.id),
+    [
+      "sensenova-6.8-flash",
+      "sensenova-6.8-flash-lite",
+      "deepseek-v4-flash",
+      "deepseek-flash",
+      "glm-5.2",
+      "kimi-k3",
+    ]
+  );
+});
+
+test("显示名取自文档，而不是接口里那个和 id 相同的 name", () => {
+  // /v1/models 的 name 就是 id，选择器里会显示 deepseek-flash。文档给了真名。
+  const names = Object.fromEntries(chatModels().map((m) => [m.id, m.name]));
+  assert.equal(names["deepseek-flash"], "DeepSeek V4.1 Flash");
+  assert.equal(names["deepseek-v4-flash"], "DeepSeek V4 Flash");
+  assert.equal(names["glm-5.2"], "GLM-5.2");
+  assert.equal(names["sensenova-6.8-flash-lite"], "SenseNova 6.8 Flash Lite");
+});
+
+test("不在文档总览里的幽灵 id 不会出现在清单里", () => {
+  // deepseek-v4.1-flash 在 /v1/models 里，元数据与 deepseek-flash 完全一致，
+  // 但请求必定 403，文档也从未列过它。
+  const ids = allModels().map((m) => m.id);
+  assert.equal(ids.includes("deepseek-v4.1-flash"), false);
+  assert.equal(ids.includes("deepseek-flash"), true);
+});
+
+test("生图模型留在清单里，但不进对话模型", () => {
+  const ids = allModels().map((m) => m.id);
+  assert.equal(ids.includes("sensenova-u1.5-lite"), true, "它确实是平台上的模型");
+  assert.equal(ids.includes("sensenova-u1.5-fast"), true);
+  assert.equal(
+    chatModels().some((m) => m.outputModalities.includes("image")),
+    false
+  );
+});
+
+test("上下文与输出上限按接口口径写死在条目里", () => {
+  const by = Object.fromEntries(chatModels().map((m) => [m.id, m]));
+  assert.deepEqual(
+    [by["sensenova-6.8-flash-lite"].contextLength, by["sensenova-6.8-flash-lite"].maxCompletionTokens],
+    [262144, 65536]
+  );
+  assert.deepEqual(
+    [by["deepseek-v4-flash"].contextLength, by["deepseek-v4-flash"].maxCompletionTokens],
+    [1048576, 65536]
+  );
+  // GLM-5.2 是唯一输出上限到 131072 的对话模型
+  assert.equal(by["glm-5.2"].maxCompletionTokens, 131072);
+});
+
+test("每个对话模型都声明了工具与推理能力", () => {
+  for (const m of chatModels()) {
+    assert.equal(m.supportsTools, true, `${m.id} 少了 tools`);
+    assert.equal(m.reasoning, true, `${m.id} 少了 reasoning`);
+    assert.equal(m.supportsJsonMode, true, `${m.id} 少了 json_mode`);
+  }
+});
+
+/* --------------------------------------------------------------- the normalizer */
+
 test("reads the documented context and output ceilings", () => {
   const m = normalizeModel(DOCUMENTED);
   assert.equal(m.contextLength, 262144);
@@ -76,12 +143,6 @@ test("capabilities come from supported_features membership", () => {
   const noTools = normalizeModel({ id: "x", supported_features: ["json_mode"] });
   assert.equal(noTools.supportsTools, false);
   assert.equal(noTools.reasoning, false);
-});
-
-test("a model with no feature list is assumed capable", () => {
-  const m = normalizeModel({ id: "kimi-k3" });
-  assert.equal(m.supportsTools, true);
-  assert.equal(m.reasoning, true);
 });
 
 test("an empty feature list means nothing declared, not nothing supported", () => {
@@ -124,135 +185,14 @@ test("entries without an id are dropped", () => {
   assert.equal(normalizeModel(null), null);
 });
 
-test("the data envelope is unwrapped", () => {
-  const models = extractModels({ data: [DOCUMENTED, IMAGE_MODEL] });
-  assert.equal(models.length, 2);
-  assert.deepEqual(
-    models.map((m) => m.id),
-    ["sensenova-6.8-flash-lite", "sensenova-u1.5-lite"]
-  );
-});
-
 test("image-creation models are not chat models", () => {
   assert.equal(isChatModel(normalizeModel(DOCUMENTED)), true);
   assert.equal(isChatModel(normalizeModel(IMAGE_MODEL)), false);
 });
 
-test("the module ships no built-in model list", async () => {
-  // Models must come from GET /v1/models only; a snapshot would drift from
-  // what the account is entitled to.
-  const mod = await import("../models.mjs");
-  assert.equal(mod.FALLBACK_MODELS, undefined);
-});
-
-/* ------------------------------------------------------------- the catalog */
-
-const respond = (body) => async () => ({
-  ok: true,
-  status: 200,
-  json: async () => body,
-});
-
-test("a live fetch drops image models", async () => {
-  const catalog = createCatalog({ fetchImpl: respond({ data: [DOCUMENTED, IMAGE_MODEL] }) });
-  const models = await catalog.load("sk-a");
-  assert.equal(models.length, 1);
-  assert.equal(models[0].id, "sensenova-6.8-flash-lite");
-  assert.equal(catalog.peek()[0].id, "sensenova-6.8-flash-lite");
-});
-
-test("one fetch per key inside the refresh window", async () => {
-  let calls = 0;
-  const catalog = createCatalog({
-    fetchImpl: async () => {
-      calls += 1;
-      return { ok: true, json: async () => ({ data: [DOCUMENTED] }) };
-    },
-  });
-  await catalog.load("sk-a");
-  await catalog.load("sk-a");
-  assert.equal(calls, 1);
-});
-
-test("switching accounts does not reuse the previous list", async () => {
-  const seen = [];
-  const catalog = createCatalog({
-    fetchImpl: async (_url, init) => {
-      const key = init.headers.Authorization;
-      seen.push(key);
-      return {
-        ok: true,
-        json: async () => ({
-          data: [{ ...DOCUMENTED, id: key === "Bearer sk-a" ? "model-a" : "model-b" }],
-        }),
-      };
-    },
-  });
-  assert.equal((await catalog.load("sk-a"))[0].id, "model-a");
-  assert.equal((await catalog.load("sk-b"))[0].id, "model-b");
-  assert.deepEqual(seen, ["Bearer sk-a", "Bearer sk-b"]);
-});
-
-test("no key means no request", async () => {
-  let calls = 0;
-  const catalog = createCatalog({
-    fetchImpl: async () => {
-      calls += 1;
-      return { ok: true, json: async () => ({ data: [DOCUMENTED] }) };
-    },
-  });
-  assert.deepEqual(await catalog.load(undefined), []);
-  assert.equal(calls, 0);
-});
-
-test("a failed fetch throws so the caller can mark the list as remembered", async () => {
-  let fail = false;
-  const catalog = createCatalog({
-    fetchImpl: async () => {
-      if (fail) return { ok: false, status: 500, json: async () => ({}) };
-      return { ok: true, json: async () => ({ data: [DOCUMENTED] }) };
-    },
-  });
-  await catalog.load("sk-a");
-  fail = true;
-  // A different key bypasses the cache, so the request really is attempted.
-  await assert.rejects(() => catalog.load("sk-b"), /HTTP 500/);
-  // The good list is still there for the caller to fall back to.
-  assert.equal(catalog.peek()[0].id, "sensenova-6.8-flash-lite");
-});
-
-test("a fetchImpl that throws synchronously does not poison the key", async () => {
-  // The throw settles the async body before the in-flight entry is stored, so
-  // cleanup must hang off the promise or the rejected task stays cached and
-  // every later load replays it without retrying.
-  let calls = 0;
-  const catalog = createCatalog({
-    fetchImpl: () => {
-      calls += 1;
-      throw new Error("sync boom");
-    },
-  });
-  await assert.rejects(() => catalog.load("sk-a"), /sync boom/);
-  await assert.rejects(() => catalog.load("sk-a"), /sync boom/);
-  assert.equal(calls, 2);
-});
-
-test("concurrent loads of one key share a single request", async () => {
-  let calls = 0;
-  const catalog = createCatalog({
-    fetchImpl: async () => {
-      calls += 1;
-      return { ok: true, json: async () => ({ data: [DOCUMENTED] }) };
-    },
-  });
-  const [a, b] = await Promise.all([catalog.load("sk-a"), catalog.load("sk-a")]);
-  assert.equal(calls, 1);
-  assert.equal(a[0].id, b[0].id);
-});
-
 /* --------------------------------------------------- Magpie object shapes */
 
-test("the provider entry carries ids and pricing from the live list", () => {
+test("the provider entry carries ids and pricing from the entry", () => {
   const m = normalizeModel({
     ...DOCUMENTED,
     pricing: { prompt: "0.2", completion: "0.8", input_cache_read: "0.02" },

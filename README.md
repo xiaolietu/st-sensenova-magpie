@@ -12,7 +12,7 @@ sensenova  通用积分池 · 5 小时窗口  0% used ↻ 2h  ·  Flash-Lite积�
 
 三句话概括它做了什么：
 
-- **模型**来自 `GET /v1/models`，没有内置清单，账号能用什么就显示什么；
+- **模型**是内置的六个对话模型（取自官方文档的模型总览），显示名用文档里的真名，启动时不打任何接口；
 - **额度**把控制台的积分池上报成 Magpie 原生的额度窗口，出现在账号行和 `magpie quota`；
 - **两套凭据**：模型用 API Key，额度用控制台令牌 —— 平台没有可用 API Key 读额度的接口，所以两者必须分开收集。
 
@@ -78,7 +78,7 @@ magpie plugin login sensenova
 
 账号和密码留空没问题：插件会回退去读 `~/.sensenova-quota.json`，那是 `snquota` 命令行在本机写下的文件。
 
-**登录之后才会有模型可选** —— 插件不内置模型清单，模型是登录后实时拉取的（见[第三节](#三模型)）。
+**模型在登录前就能看到** —— 清单是内置的，不依赖登录也不依赖任何接口（见[第三节](#三模型)）。只是没有 API Key 时请求发不出去。
 
 ### 账号行显示的名字
 
@@ -121,73 +121,56 @@ printf '%s\n%s\n%s\n.\n' "$ACCOUNT" "$PASSWORD" "$SENSENOVA_API_KEY" | magpie pl
 
 ## 三、模型
 
-模型列表来自官方文档的 `GET /v1/models` 接口（[模型列表 List Models](https://platform.sensenova.cn/docs)），返回 `{ data: [ … ] }`，每个 `Model` 对象携带供应商需要的全部信息：
+清单**写死在 `models.mjs`**，就是官方文档[模型总览](https://platform.sensenova.cn/docs)列的那六个对话模型，顺序也一致：
 
-| 接口字段 | 用途 |
-| --- | --- |
-| `id` | 请求时真正发出去的模型名 —— 请求就用这个 |
-| `name` | 显示名称（平台通常与 `id` 相同） |
-| `context_length` / `max_output_length` | 映射为 Magpie 的 `limit.context` / `limit.output` |
-| `input_modalities` / `output_modalities` | 决定 `attachment` 与模态能力位 |
-| `supported_features` | 决定 `tools` / `reasoning` / `json_mode` 三个能力位 |
-| `supported_sampling_parameters` | 决定能不能发 `temperature` |
-| `pricing.prompt` / `.completion` / `.input_cache_read` | 映射为 `cost.input` / `cost.output` / `cost.cache.read` |
+| 模型 | Model ID | 上下文 | 输出上限 | 输入 |
+| --- | --- | --- | --- | --- |
+| SenseNova 6.8 Flash | `sensenova-6.8-flash` | 262,144 | 65,536 | 文本 + 图片 |
+| SenseNova 6.8 Flash Lite | `sensenova-6.8-flash-lite` | 262,144 | 65,536 | 文本 + 图片 |
+| DeepSeek V4 Flash | `deepseek-v4-flash` | 1,048,576 | 65,536 | 文本 |
+| DeepSeek V4.1 Flash | `deepseek-flash` | 1,048,576 | 65,536 | 文本 |
+| GLM-5.2 | `glm-5.2` | 1,048,576 | 131,072 | 文本 |
+| Kimi K3 | `kimi-k3` | 1,048,576 | 65,536 | 文本 |
 
-**两个容易写错、而且确实写错过**：平台把输出上限拼成 `max_output_length`（不是 OpenAI 的 `max_completion_tokens`）；能力是 **`supported_features` 数组的成员**，不是逐项的布尔字段。按 OpenAI 的拼法去读会一无所获。
+名字和 id 以文档为准，数值以 `GET /v1/models` 的实测快照（2026-11-02）为准 —— 那几个数才是 chat 接口真正执行的。
 
-上表 12 个字段在真实响应中逐条核对过：每个模型都带全，没有一条缺失。
+`config` 钩子与 `provider.models` 钩子都从同一份清单生成，所以**登录前就能看到模型**，`magpie plugin --json` 也列得出来。
 
-列表按 **API Key 分桶缓存 6 小时**，所以切换账号不会复用上一个账号的模型列表。
+### 为什么不再实时拉 `/v1/models`
 
-### 没有任何内置模型清单
+三条，都是实测出来的：
 
-**插件不携带任何静态模型列表**，模型完全来自 `GET /v1/models`。`config` 钩子声明供应商时 `models` 是空对象，模型由 `provider.models` 钩子按账号实时填充 —— 账号能用的模型就是列表里的那些，不会出现「插件写着有、账号其实没有」的情况。
+1. **接口列的是「平台在售」，不是「你的套餐能用」。** `deepseek-v4.1-flash` 在接口里，元数据与 `deepseek-flash` 逐项相同，但请求必定 `403 model is not available in the current token plan`；文档的总览里也从来没有它。接口没有任何字段能区分这两者 —— 留着它，选择器里就永远挂着一个点不动的模型。
+2. **接口的 `name` 字段就是 id。** 选择器里显示的是 `deepseek-flash`，而不是「DeepSeek V4.1 Flash」。
+3. **启动时多一个请求换不来什么。** 模型目录的变化频率是「发新模型」，静态清单跟得上；而且它不会失败，也就没有「回退到上一次成功的列表」那套逻辑需要写对。
 
-三种情形下的行为：
+### 改清单的方法
 
-| 情形 | 结果 |
-|---|---|
-| 有 API Key，接口正常 | 直接用接口返回的列表（已过滤图像模型） |
-| 有 API Key，但接口故障 | 返回上一次成功拉到的列表，并打上 Magpie 的回退标记；从未成功过则为空 |
-| 尚未登录 | 没有任何模型，打回退标记 |
-
-所以**登录之前供应商是空的**，这是预期行为 —— 没有 Key 本来就发不出请求。
-
-Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入账号实际没有的模型 id；**以实时列表为准**。
+改 `models.mjs` 的 `CATALOG`，改 `package.json` 的版本号，跑 `node --test test/*.test.mjs`。测试把 id 集合、显示名、以及「生图模型不进对话模型」都钉死了，随手改会立刻失败。
 
 ### 对话模型与图像模型
 
-`/v1/models` 也会列出图像创作模型（`sensenova-u1.5-lite` 等），它们的 `output_modalities` 是 `["image"]`，走的是 `/v1/images/generations`。**本插件只讲 chat completions，所以这些条目被过滤掉了** —— 实测把它们发给 `/v1/chat/completions` 只会得到 404 `model is not found`。凡是 `output_modalities` 含 `text` 的都保留。
+清单里保留了平台的两个生图模型（`sensenova-u1.5-lite`、`sensenova-u1.5-fast`，`output_modalities: ["image"]`），但**不会出现在 Magpie 里** —— 它们走 `/v1/images/generations`，实测发给 `/v1/chat/completions` 只会得到 404 `model is not found`。保留它们是为了让这份清单描述的是平台，而不是这个供应商摘出来的一半。
 
-> 为什么图像模型不能接：Magpie 的插件体系没有生图通道。它的 npm 到 API 映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions），模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
+> 为什么图像模型不能接：Magpie 的插件体系没有生图通道。npm 到 API 的映射只有四类，全是对话类（Anthropic Messages、OpenAI Responses、Gemini、chat completions）；模型字段里的 `capabilities.input` 描述的是**输入**模态（能不能收图），没有输出侧的生图声明。即使写了调用 `/v1/images/generations` 的代码，也没有钩子会被触发。要生图只能脱离 Magpie 单独做工具。
 
-### 列表里的模型不一定都能用
+### 清单是平台级的，套餐是账号级的
 
-`/v1/models` 返回的是平台当前在售的模型，**不等于你的套餐能用哪些**。
+同一个 id，不同账号的可用性不同。所以 `provider.models` 还会做一件事：**把上游明确以 `not available in the current token plan` 拒过的 id，从该账号的列表里去掉**。
 
-实测（2026-10-28，一个 Free Plan 账号）：
-
-| 模型 | 列表里 | 实际请求 |
-| --- | --- | --- |
-| `deepseek-v4-flash` | ✓ | 200 |
-| `deepseek-flash` | ✓ | 200（偶发 429，见下） |
-| `deepseek-v4.1-flash` | ✓ | **403 `model is not available in the current token plan`** |
-
-`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。平台自己的模型总览也没有列它 —— 那份总览写的是 **DeepSeek V4.1 Flash → `deepseek-flash`**。
-
-所以插件不内置任何 id 黑名单（写死 id 就成了第二份快照，换账号或平台补货都会误判），而是**用实际结果纠正列表**：某个模型真的被上游以 `not available in the current token plan` 拒过，就把这个 id 从该账号的列表里去掉，`provider.models` 下次不再给出它。
-
-- **按账号记**：换个账号或套餐不同，各自判断；
 - **只认那一句原话**：403 还覆盖权限、风控等含义，那些不动列表；
-- **只在内存里**：套餐升级后重启进程就恢复，不会把一个错误的「不行」永久写进磁盘。
+- **按账号记**（按 API Key 分桶），不同账号各判各的；
+- **只在内存里**：套餐升级后重启进程即恢复，不会把一个错误的「不行」永久写进磁盘。
 
-另有一种**限流**：`deepseek-flash` 会返回 `429 inference exceeds tpm/rpm limit`。注意它**不是瞬时抖动** —— 实测间隔 20 秒、75 秒、10 分钟各单发一次，全部 429，而同一时间窗口里 `sensenova-6.8-flash` 和 `sensenova-6.8-flash-lite` 都是 200。所以 429 是**按模型**记的，不是账号级的，也不是「第二个请求就会挂」那么简单。
+### 文档与接口对不上的两处
 
-同一个 429 里混着两种含义 —— 文档的错误码表写的是 `429 quota_exceeded_error`「Quota or rate limit exceeded」，额度与速率共用一个码，光看错误码分不出来。要分清只能做对照：**换一个模型请求一次**。同账号别的模型正常 = 这个模型的额度或容量对当前套餐不可用；全都 429 = 才轮到池子见底。
+| 项 | 文档 | 接口 | 采用 |
+| --- | --- | --- | --- |
+| `deepseek-flash` 的输入模态 | 支持图片（`content` 对象数组，JPEG/PNG/GIF/WebP） | `["text"]` | 接口 —— 先按纯文本声明，免得打开一个可能被拒的附件能力 |
+| `deepseek-flash` 的输出上限 | `max_tokens` 范围 `[1, 393216]` | `max_output_length: 65536` | 接口 —— 写 65536，保守但不会因为超限被拒 |
 
-连续快速请求也确实会触发 429（同一秒的第二个请求），这是插件把每个账号并发声明为 1 的原因，见[并发上限](#并发上限每个账号-1-个请求)。
+两处都是等平台自己说清再改，改的是 `models.mjs` 里对应的那两行。
 
-文档的[模型总览](https://platform.sensenova.cn/docs)列了 6 个对话模型（`sensenova-6.8-flash`、`sensenova-6.8-flash-lite`、`deepseek-v4-flash`、`deepseek-flash`、`glm-5.2`、`kimi-k3`），`/v1/models` 返回 8 个（另加生图模型 `sensenova-u1.5-lite` 和不在总览里的 `deepseek-v4.1-flash`）—— 文档与接口并不同步，**以接口为准**，可用性以实际请求为准。
 
 ---
 
@@ -367,14 +350,13 @@ magpie plugin options sensenova '{"locale":"en"}'
 ## 六、已知限制
 
 - **默认每个账号只跑 1 个请求。** 平台限流阈值极低（同一秒的第二个请求就 429），插件因此在 `package.json` 里声明 `maxConcurrency: 1`。代价是多个 agent 同时干活时会排队；账号页下拉手动改成 2/3/5/10 或「不限制」即可，用户的选择优先。
-- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段。插件照实展示，但**被上游以「不在当前套餐」拒过的那个 id 会被记住，并从该账号的列表里移除**（见[第三节](#列表里的模型不一定都能用)），所以通常只会撞一次。
+- **清单是静态的，平台发新模型要跟一次版本。** 好处是稳定，代价是新模型不会自己冒出来。另外清单是平台级的，套餐是账号级的：**被上游以「不在当前套餐」拒过的 id 会被记住，并从该账号的列表里移除**（见[清单是平台级的，套餐是账号级的](#清单是平台级的套餐是账号级的)），所以通常只会撞一次。
 - **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一条错误，**仅此而已**：额度不显示，模型调用照常，账号也不会被标记为需重新登录（见[额度失败不能连累账号](#额度失败不能连累账号)）。
 - **续期到的控制台令牌只存在内存里。** 重启 Magpie 后第一次读额度会重新登录一次控制台。这是有意的：提示里输入的账号密码不该被插件另存一份到磁盘（走 `~/.sensenova-quota.json` 的那条路本来就会写回该文件）。
 - 额度接口是控制台内部接口而非公开接口，改版可能使其失效。
-- 登录之前供应商没有可选模型；首次拉取失败时同样为空，因为没有内置清单可退。
-- 接口若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入），文档所述的响应形状不会省略。
+- 清单里的条目若省略某个字段，该字段用保守默认值（上下文 131072、输出 32768、仅文本输入）；现在的六个条目都写全了。
 - **图像生成模型不接入** —— Magpie 插件体系没有生图通道，见第三节末尾。
 
 ---
@@ -577,7 +559,7 @@ Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（�
 node --test test/*.test.mjs
 ```
 
-当前 93 个测试，覆盖：
+当前 90 个测试，覆盖：
 
 - 清单声明（`magpie.maxConcurrency` 必须是 1 且在 1–1000 范围内、`type` / `main` / 版本号形状、`files` 列出全部被导入的模块）；
 
@@ -587,9 +569,9 @@ node --test test/*.test.mjs
 - 字段缺失时的降级；JWT 过期判断；refresh token 续期；无凭据时报出的错误；
 - `fetch` 钩子在 `(url, init)` 与 `Request` 两种入参下都保住 body 和 headers；
 - `__` 前缀的内部键不会写进凭据文件；
-- 文档所述的 `/v1/models` 形状端到端（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字、图像创作条目被过滤）；
-- 模块不携带任何内置模型清单（`FALLBACK_MODELS` 必须不存在）；
-- 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
+- 静态清单本身（id 集合与顺序、显示名是「DeepSeek V4.1 Flash」而不是 id、`deepseek-v4.1-flash` 不在清单里、生图模型留在清单但不进对话模型、每个模型的上下文与输出上限）；
+- 字段口径（`max_output_length` 而非 `max_completion_tokens` 承载输出上限、`supported_features` 成员驱动能力位、空数组视为「未声明」而非「无能力」、定价字符串转数字）；
+- 模型声明不发任何请求（`config` 与 `provider.models` 都来自同一份清单），且登录前就能列出；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；
 - **额度失败不连累账号**（失败与「没有控制台凭据」两种情形都带 `signIn: "kept"`、续期到的令牌在内存里复用因此一个进程只登录一次、失败后退避且 16 秒内不重登、续期整体失败时封顶 2 小时）；
 - IAM 的失败原因归一化后能认出 `operationTooFrequently`（实测响应体直接做用例），不再退化成「登录被拒绝」；

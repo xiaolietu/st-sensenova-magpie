@@ -65,20 +65,6 @@ export function apiKeyOf(auth) {
 }
 
 /**
- * Mark a model list as the remembered one rather than a live one.
- *
- * Magpie uses this to tell "the account has these models" apart from "the
- * fetch failed and this is the last thing we knew", so a stale list is not
- * mistaken for an authoritative answer.
- *
- * @param {object} models - the list to mark.
- * @returns {object} a copy carrying the marker.
- */
-export function fellBack(models) {
-  return { ...models, [Symbol.for("magpie.fellBack")]: true };
-}
-
-/**
  * Read the console credentials out of the sign-in record.
  *
  * Magpie keeps the answers a `prompts` method collected under `metadata`, which

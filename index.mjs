@@ -25,8 +25,8 @@
  * @module st-sensenova-magpie
  */
 
-import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, fellBack, readAuth } from "./internal.mjs";
-import { DEFAULT_BASE_URL, NPM, createCatalog, toProviderModel } from "./models.mjs";
+import { PROVIDER, ICON, apiKeyOf, consoleAuthOf, readAuth } from "./internal.mjs";
+import { DEFAULT_BASE_URL, NPM, chatModels, toConfigModel, toProviderModel } from "./models.mjs";
 import { accountNameOf, QuotaError, readCredentials, readQuota, writeCredentials } from "./quota.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 
@@ -68,7 +68,6 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
     scopeModel: typeof options.scopeModel === "string" ? options.scopeModel : "flash-lite",
     credentialsFile: options.credentialsFile ?? undefined,
   };
-  const catalog = createCatalog({ baseURL: opts.baseURL });
 
   const log = (level, message) => {
     try {
@@ -278,12 +277,15 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
 
   return {
     /**
-     * Declare the provider.
+     * Declare the provider and its models.
      *
-     * No models are declared here. They depend on the account and arrive from
-     * the `models` hook below, which reads `GET /v1/models`; declaring a
-     * built-in list would only be a snapshot that drifts from what the account
-     * is actually entitled to.
+     * The list is static (see `models.mjs`), so it is declared here as well as
+     * returned from `provider.models`: that way the models are visible before
+     * anyone signs in, and `magpie plugin --json` can list them.
+     *
+     * `...was` keeps whatever the user set in `plugins.json`, but the model
+     * map is always this plugin's — it is the only thing that knows what the
+     * ids are called.
      */
     config: async (cfg) => {
       cfg.provider ??= {};
@@ -293,58 +295,34 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
         npm: NPM,
         api: opts.baseURL ?? DEFAULT_BASE_URL,
         ...was,
-        models: {},
+        models: Object.fromEntries(chatModels().map((m) => [m.id, toConfigModel(m)])),
       };
     },
 
     provider: {
       id: PROVIDER,
       /**
-       * The models this account can actually use, straight from `/v1/models`.
+       * The models this account can use.
        *
-       * Two things are removed. Image-creation models, which the catalog drops
-       * because this provider speaks chat completions only. And models the
-       * upstream has already refused for this account with `not available in
-       * the current token plan` — `/v1/models` lists what the platform sells,
-       * not what the plan includes, and it carries no field to tell them
-       * apart (实测 `deepseek-v4.1-flash` 与 `deepseek-flash` 的 context、
-       * features、pricing 逐项相同，前者 403、后者 200). So the list is
-       * corrected by what actually happened rather than by a hard-coded id
-       * list, which would be a second snapshot to drift.
+       * The catalogue is static, so this hook does one job: drop the ids the
+       * upstream has already refused for *this* account with `not available in
+       * the current token plan`. The list is per plan, and the static one is
+       * per platform — a Free account and a paid one get different subsets of
+       * the same six models, and the only signal either way is the refusal.
        *
-       * On failure the last list that was fetched is served and marked with
-       * Magpie's fallback flag, so a transient error does not empty the model
-       * picker. Before the first successful fetch there is nothing to serve and
-       * the provider simply has no models yet.
+       * Image-creation models never reach here; `chatModels()` drops them
+       * because this provider speaks chat completions only.
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
+        const baseURL = opts.baseURL ?? DEFAULT_BASE_URL;
         const key = apiKeyOf(auth);
         const blocked = (key && refusedModels.get(key)) || null;
-        /** Hide what the upstream has already rejected for this account. */
-        const visible = (list) => (blocked ? list.filter((m) => !blocked.has(m.id)) : list);
-        const asProvider = (list) =>
-          Object.fromEntries(
-            visible(list).map((m) => [
-              m.id,
-              toProviderModel(m, id, { baseURL: opts.baseURL ?? catalog.baseURL }),
-            ])
-          );
-        /** What to serve when the live list is unavailable. */
-        const remembered = () => {
-          const known = catalog.peek();
-          return fellBack(known?.length ? asProvider(known) : (provider?.models ?? {}));
-        };
-
-        if (!key) return remembered();
-        try {
-          const live = await catalog.load(key);
-          if (!live.length) return remembered();
-          return asProvider(live);
-        } catch (error) {
-          log("warn", `sensenova: keeping the known model list: ${error.message}`);
-          return remembered();
-        }
+        return Object.fromEntries(
+          chatModels()
+            .filter((m) => !blocked || !blocked.has(m.id))
+            .map((m) => [m.id, toProviderModel(m, id, { baseURL })])
+        );
       },
     },
 

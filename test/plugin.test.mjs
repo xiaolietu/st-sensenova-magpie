@@ -124,42 +124,31 @@ async function usageWith(options, auth) {
 }
 
 test("上游说「不在当前套餐」的模型，下次列表里就不再出现", async () => {
-  // /v1/models 列的是平台在售清单，不是套餐清单，而且同族两个 id 的元数据
-  // 一模一样（实测 deepseek-v4.1-flash 403、deepseek-flash 200）。唯一可靠的
-  // 信号就是那次 403，所以记下来，别让人再选一次。
+  // 清单是静态的（平台级），而套餐是账号级的：同一个 id 有人能用有人 403。
+  // 唯一可靠的信号就是那次 403，记下来，别让人再选一次。
   const auth = { type: "api", key: "sk-1" };
   const real = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith("/models")) {
-      return new Response(
-        JSON.stringify({
-          data: [
-            { id: "deepseek-flash", context_length: 1000, max_output_length: 100 },
-            { id: "deepseek-v4.1-flash", context_length: 1000, max_output_length: 100 },
-          ],
-        })
-      );
-    }
-    return new Response(
+  globalThis.fetch = async () =>
+    new Response(
       JSON.stringify({ error: { message: "model is not available in the current token plan" } }),
       { status: 403 }
     );
-  };
   try {
-    // catalog 在构造时就捕获了 fetch，所以 stub 必须先就位
     const plugin = await SenseNovaPlugin({}, {});
     const before = await plugin.provider.models({}, { auth });
-    assert.deepEqual(Object.keys(before).sort(), ["deepseek-flash", "deepseek-v4.1-flash"]);
+    assert.equal(before["deepseek-flash"].name, "DeepSeek V4.1 Flash");
+    assert.ok(Object.keys(before).length > 1);
 
     const { fetch: wrapped } = await plugin.auth.loader(async () => auth);
     await wrapped("https://token.sensenova.cn/v1/chat/completions", {
       method: "POST",
-      body: JSON.stringify({ model: "deepseek-v4.1-flash", messages: [] }),
+      body: JSON.stringify({ model: "deepseek-flash", messages: [] }),
     });
     await new Promise((r) => setTimeout(r, 0)); // 等 clone().text() 的 then 落地
 
     const after = await plugin.provider.models({}, { auth });
-    assert.deepEqual(Object.keys(after), ["deepseek-flash"], "被拒的 id 应消失，另一个保留");
+    assert.equal("deepseek-flash" in after, false, "被拒的 id 应消失");
+    assert.equal(Object.keys(after).length, Object.keys(before).length - 1, "其它模型不受影响");
   } finally {
     globalThis.fetch = real;
   }
@@ -169,12 +158,7 @@ test("403 不是「不在套餐」时不动模型列表", async () => {
   // 403 还覆盖别的含义（权限、风控）。只认那一句原话，否则会把好模型误伤掉。
   const auth = { type: "api", key: "sk-1" };
   const real = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith("/models")) {
-      return new Response(JSON.stringify({ data: [{ id: "deepseek-flash", context_length: 1000 }] }));
-    }
-    return new Response(JSON.stringify({ error: { message: "Forbidden" } }), { status: 403 });
-  };
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: "Forbidden" } }), { status: 403 });
   try {
     const plugin = await SenseNovaPlugin({}, {});
     await plugin.provider.models({}, { auth });
@@ -185,10 +169,40 @@ test("403 不是「不在套餐」时不动模型列表", async () => {
     });
     await new Promise((r) => setTimeout(r, 0));
     const after = await plugin.provider.models({}, { auth });
-    assert.deepEqual(Object.keys(after), ["deepseek-flash"]);
+    assert.equal("deepseek-flash" in after, true);
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test("模型清单是静态的：不登录也有模型，且不发任何请求", async () => {
+  const real = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("{}");
+  };
+  try {
+    const plugin = await SenseNovaPlugin({}, {});
+    const models = await plugin.provider.models({}, { auth: { type: "api", key: "sk-1" } });
+    assert.equal(Object.keys(models).length, 6);
+    assert.equal(models["deepseek-flash"].id, "deepseek-flash");
+    assert.equal(models["deepseek-flash"].api.url, "https://token.sensenova.cn/v1");
+    assert.equal(calls, 0, "声明模型不该打任何接口");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("config 钩子一并声明这六个模型，登录前就能列出", async () => {
+  const plugin = await SenseNovaPlugin({}, {});
+  const cfg = {};
+  await plugin.config(cfg);
+  const declared = cfg.provider.sensenova.models;
+  assert.equal(Object.keys(declared).length, 6);
+  assert.equal(declared["deepseek-flash"].name, "DeepSeek V4.1 Flash");
+  assert.equal(declared["glm-5.2"].limit.output, 131072);
+  assert.equal(declared["sensenova-u1.5-lite"], undefined, "生图模型不该被声明");
 });
 
 test("locale: en 让窗口标签、单位和余额都变英文", async () => {

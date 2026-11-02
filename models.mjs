@@ -1,17 +1,36 @@
 /**
- * Model discovery for SenseNova Token Plan.
+ * The model list for SenseNova Token Plan, declared statically.
  *
- * The Token Plan speaks the OpenAI dialect at `https://token.sensenova.cn/v1`,
- * and `GET /v1/models` is a documented endpoint — it returns `{ data: [ … ] }`
- * with the id, modalities, context window, pricing and capability flags for
- * every model the account can use. **That live list is the only source of
- * models**: there is no built-in snapshot to drift out of date, so what the
- * provider offers is exactly what the account is entitled to right now.
+ * **Where the list comes from.** The 模型总览 table in the official docs
+ * (https://platform.sensenova.cn/docs) decides which models exist and what
+ * they are called; the numbers (`context_length` / `max_output_length` /
+ * modalities / `supported_features`) come from a `GET /v1/models` snapshot
+ * taken 2026-11-02, because those are the values the chat endpoint enforces.
+ * The docs and that endpoint disagree in two places — noted on the entries
+ * below — and where they do, the endpoint wins: it is the one answering the
+ * request.
  *
- * Field names below follow the platform's own `Model` object, not OpenAI's:
+ * **Why not call `/v1/models` at runtime.** Three reasons, all measured:
+ *
+ *   - The endpoint lists what the platform *sells*, not what a plan includes.
+ *     `deepseek-v4.1-flash` comes back with metadata identical to
+ *     `deepseek-flash`'s and answers `403 model is not available in the
+ *     current token plan`. No field tells them apart, so a live list always
+ *     advertises at least one model that cannot answer — and that id is not
+ *     in the docs' 模型总览 either.
+ *   - The endpoint's `name` field is the id (`deepseek-flash`), so the picker
+ *     shows raw ids instead of "DeepSeek V4.1 Flash".
+ *   - A startup request buys nothing: the catalogue changes on the scale of
+ *     model releases, which is the cadence a static list follows. And a list
+ *     that cannot fail has no stale-fallback path to get wrong.
+ *
+ * **Updating it.** Edit `CATALOG`, bump the version in `package.json`, run
+ * `node --test test/*.test.mjs`. The tests pin the id set, the display names
+ * and the image-model exclusion, so a hasty edit fails loudly.
+ *
+ * Field names follow the platform's own `Model` object, not OpenAI's:
  * `context_length` / `max_output_length` (not `max_completion_tokens`), and
- * capability flags arrive as members of `supported_features` rather than as
- * booleans.
+ * capability flags are members of `supported_features` rather than booleans.
  *
  * @module st-sensenova-magpie/models
  */
@@ -22,21 +41,103 @@ export const NPM = "@ai-sdk/openai-compatible";
 /** Token Plan root. Every request path is appended to it. */
 export const DEFAULT_BASE_URL = "https://token.sensenova.cn/v1";
 
-/** Abandon a catalog fetch after this long so startup is never held open. */
-export const DEFAULT_TIMEOUT_MS = 15000;
-
-/** How long a fetched list is trusted, in hours. */
-export const DEFAULT_REFRESH_HOURS = 6;
-
 /**
- * Fallbacks for a model whose entry omits a field.
+ * Fallbacks for an entry that omits a field.
  *
- * These are not a model list — they only keep one entry usable when the
- * endpoint leaves something out, which the documented shape does not do.
+ * These are not a model list — they only keep one entry usable when something
+ * is missing, which the entries below never are.
  */
 const DEFAULT_CONTEXT = 131072;
 const DEFAULT_OUTPUT = 32768;
 
+/** The capability set the platform reports for every chat model it offers. */
+const FULL = ["tools", "json_mode", "reasoning"];
+
+/**
+ * Every model the docs' 模型总览 lists, in that page's order.
+ *
+ * The image-creation models are kept so this stays a description of the
+ * platform rather than of this provider, and are filtered out by
+ * `chatModels()`: Magpie's plugin system has no image-generation channel, and
+ * posting those ids to `/v1/chat/completions` only earns a 404.
+ */
+const CATALOG = [
+  {
+    id: "sensenova-6.8-flash",
+    name: "SenseNova 6.8 Flash",
+    context_length: 262144,
+    max_output_length: 65536,
+    input_modalities: ["text", "image"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    id: "sensenova-6.8-flash-lite",
+    name: "SenseNova 6.8 Flash Lite",
+    context_length: 262144,
+    max_output_length: 65536,
+    input_modalities: ["text", "image"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    id: "sensenova-u1.5-lite",
+    name: "SenseNova U1.5 Lite",
+    context_length: 32768,
+    max_output_length: 4096,
+    input_modalities: ["text", "image"],
+    output_modalities: ["image"],
+    supported_features: [],
+  },
+  {
+    id: "sensenova-u1.5-fast",
+    name: "SenseNova U1.5 Fast",
+    context_length: 32768,
+    max_output_length: 4096,
+    input_modalities: ["text", "image"],
+    output_modalities: ["image"],
+    supported_features: [],
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    context_length: 1048576,
+    max_output_length: 65536,
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    // 文档说它支持图片输入（`content` 用对象数组传 JPEG/PNG/GIF/WebP），
+    // 但 `/v1/models` 报的是 `["text"]`。先按接口来，免得打开一个可能被拒的
+    // 附件能力；文档若确认了再改这一行。
+    id: "deepseek-flash",
+    name: "DeepSeek V4.1 Flash",
+    context_length: 1048576,
+    max_output_length: 65536,
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    id: "glm-5.2",
+    name: "GLM-5.2",
+    context_length: 1048576,
+    max_output_length: 131072,
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+  {
+    id: "kimi-k3",
+    name: "Kimi K3",
+    context_length: 1048576,
+    max_output_length: 65536,
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    supported_features: FULL,
+  },
+];
 
 const positive = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
 const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -48,12 +149,13 @@ const price = (v) => {
 };
 
 /**
- * Normalize one `Model` object from `GET /v1/models`.
+ * Normalize one catalogue entry.
  *
- * Every field the platform sends is used as-is. The constants only fill in a
- * field the response left out, so one incomplete entry cannot break the list.
+ * The entry shape is the platform's own `Model` object, so a line can be
+ * pasted straight out of a `/v1/models` response, and the field rules live in
+ * exactly one place instead of being duplicated into every entry.
  *
- * @param {object} raw - one entry from the endpoint.
+ * @param {object} raw - one entry.
  * @returns {object|null} a normalized model, or null when it has no id.
  */
 export function normalizeModel(raw) {
@@ -99,18 +201,6 @@ export function normalizeModel(raw) {
   };
 }
 
-/** Pull a model array out of whatever envelope the endpoint used. */
-export function extractModels(payload) {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.data)
-      ? payload.data
-      : Array.isArray(payload?.models)
-        ? payload.models
-        : [];
-  return rows.map(normalizeModel).filter(Boolean);
-}
-
 /**
  * Whether a model can serve a chat completion.
  *
@@ -124,69 +214,14 @@ export function isChatModel(model) {
   return output.includes("text");
 }
 
-/**
- * A catalog that fetches once per key and caches the result.
- *
- * A failed fetch throws, so the caller can mark what it serves as remembered
- * rather than live; `peek()` keeps returning the last good list throughout.
- *
- * @param {{baseURL?: string, timeoutMs?: number, refreshHours?: number, fetchImpl?: Function}} [opts]
- */
-export function createCatalog(opts = {}) {
-  const baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const refreshMs = (opts.refreshHours ?? DEFAULT_REFRESH_HOURS) * 3600_000;
-  const doFetch = opts.fetchImpl ?? fetch;
+/** Every catalogue entry, normalized — chat and image alike. */
+export function allModels() {
+  return CATALOG.map(normalizeModel).filter(Boolean);
+}
 
-  /** Per-key cache: switching accounts must not reuse the previous list. */
-  const cache = new Map();
-  const inflight = new Map();
-  let last = null;
-
-  /** The last successful list, or null. Never blocks. */
-  const peek = () => last;
-
-  /** Fetch the list, at most once per key per refresh window. */
-  const load = async (apiKey) => {
-    if (!apiKey) return last ?? [];
-
-    const hit = cache.get(apiKey);
-    if (hit && Date.now() - hit.at < refreshMs) return hit.models;
-    const running = inflight.get(apiKey);
-    if (running) return running;
-
-    const task = (async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const res = await doFetch(`${baseURL}/models`, {
-          headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const models = extractModels(await res.json()).filter(isChatModel);
-        if (models.length) {
-          cache.set(apiKey, { models, at: Date.now() });
-          last = models;
-        }
-        return models.length ? models : (hit?.models ?? last ?? []);
-      } finally {
-        clearTimeout(timer);
-      }
-    })().finally(() => {
-      // Attached to the promise rather than placed in the async body: a
-      // `fetchImpl` that throws synchronously settles the body before
-      // `inflight.set` below runs, so an in-body cleanup would delete the key
-      // first and leave the rejected promise cached forever — every later load
-      // for that key would replay the same failure without retrying.
-      inflight.delete(apiKey);
-    });
-
-    inflight.set(apiKey, task);
-    return task;
-  };
-
-  return { peek, load, baseURL };
+/** The entries this provider can serve. */
+export function chatModels() {
+  return allModels().filter(isChatModel);
 }
 
 /* --------------------------------------------------------- Magpie 对象形状 */
