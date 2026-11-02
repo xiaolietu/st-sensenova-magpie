@@ -183,8 +183,44 @@ test("ensureToken 过期时用 refresh_token 续期", async () => {
   assert.equal(cfg.refresh_token, "rt2");
 });
 
-test("ensureToken 在没有凭据时抛出可读错误", async () => {
+test("IAM 的失败原因大小写不固定，不能因此退化成「登录被拒绝」", async () => {
+  // 实测响应（2026-11-02，密码登录被风控时）：
+  //   {"code":7,"message":"PermissionDenied",
+  //    "details":[{"reason":"operationTooFrequently",...},{"message":"operation too frequent"}]}
+  // 早先的映射表写的是 `OperationTooFrequently`（大写开头），永远匹配不上，
+  // 于是真实原因「操作过于频繁」被报成了「登录被拒绝」—— 用户以为登录过期，
+  // 反复重登，而这恰恰又加重了这个限流。
+  const IAM_403 = {
+    code: 7,
+    message: "PermissionDenied",
+    details: [
+      { "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "operationTooFrequently", domain: "iam" },
+      { "@type": "type.googleapis.com/google.rpc.LocalizedMessage", locale: "*", message: "operation too frequent" },
+    ],
+  };
+  const t = strings("zh");
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("/oauth2/auth")) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://iam.example/v1/auth/login?login_challenge=CH" },
+      });
+    }
+    if (u.includes("/checkChallenge")) return new Response(JSON.stringify({ is_valid: true }));
+    return new Response(JSON.stringify(IAM_403), { status: 403 });
+  };
+
   await assert.rejects(
+    () => ensureToken({ username: "u", password: "p", base: "https://platform.example" }, { fetchImpl }),
+    (e) => {
+      assert.equal(e.message, t.loginTooFrequent, "应报真实原因，而不是兜底的「登录被拒绝」");
+      return true;
+    }
+  );
+});
+
+test("ensureToken 在没有凭据时抛出可读错误", async () => {  await assert.rejects(
     () => ensureToken({ access_token: "stale", expires_at: 1 }, { fetchImpl: async () => new Response("{}") }),
     (e) => e instanceof QuotaError && /snquota login/.test(e.message)
   );

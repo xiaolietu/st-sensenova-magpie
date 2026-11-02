@@ -123,6 +123,74 @@ async function usageWith(options, auth) {
   }
 }
 
+test("上游说「不在当前套餐」的模型，下次列表里就不再出现", async () => {
+  // /v1/models 列的是平台在售清单，不是套餐清单，而且同族两个 id 的元数据
+  // 一模一样（实测 deepseek-v4.1-flash 403、deepseek-flash 200）。唯一可靠的
+  // 信号就是那次 403，所以记下来，别让人再选一次。
+  const auth = { type: "api", key: "sk-1" };
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/models")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: "deepseek-flash", context_length: 1000, max_output_length: 100 },
+            { id: "deepseek-v4.1-flash", context_length: 1000, max_output_length: 100 },
+          ],
+        })
+      );
+    }
+    return new Response(
+      JSON.stringify({ error: { message: "model is not available in the current token plan" } }),
+      { status: 403 }
+    );
+  };
+  try {
+    // catalog 在构造时就捕获了 fetch，所以 stub 必须先就位
+    const plugin = await SenseNovaPlugin({}, {});
+    const before = await plugin.provider.models({}, { auth });
+    assert.deepEqual(Object.keys(before).sort(), ["deepseek-flash", "deepseek-v4.1-flash"]);
+
+    const { fetch: wrapped } = await plugin.auth.loader(async () => auth);
+    await wrapped("https://token.sensenova.cn/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "deepseek-v4.1-flash", messages: [] }),
+    });
+    await new Promise((r) => setTimeout(r, 0)); // 等 clone().text() 的 then 落地
+
+    const after = await plugin.provider.models({}, { auth });
+    assert.deepEqual(Object.keys(after), ["deepseek-flash"], "被拒的 id 应消失，另一个保留");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("403 不是「不在套餐」时不动模型列表", async () => {
+  // 403 还覆盖别的含义（权限、风控）。只认那一句原话，否则会把好模型误伤掉。
+  const auth = { type: "api", key: "sk-1" };
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/models")) {
+      return new Response(JSON.stringify({ data: [{ id: "deepseek-flash", context_length: 1000 }] }));
+    }
+    return new Response(JSON.stringify({ error: { message: "Forbidden" } }), { status: 403 });
+  };
+  try {
+    const plugin = await SenseNovaPlugin({}, {});
+    await plugin.provider.models({}, { auth });
+    const { fetch: wrapped } = await plugin.auth.loader(async () => auth);
+    await wrapped("https://token.sensenova.cn/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "deepseek-flash", messages: [] }),
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    const after = await plugin.provider.models({}, { auth });
+    assert.deepEqual(Object.keys(after), ["deepseek-flash"]);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 test("locale: en 让窗口标签、单位和余额都变英文", async () => {
   const usage = await usageWith({ locale: "en" }, { token: "opaque" });
   assert.equal(usage.plan, "Free Plan");

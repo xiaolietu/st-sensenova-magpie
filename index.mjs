@@ -104,6 +104,53 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
   };
 
   /**
+   * Models the upstream has refused for an account, per API key.
+   *
+   * `/v1/models` answers "what does the platform sell", not "what does this
+   * plan include" — and it carries no field to tell them apart. Measured on a
+   * Free Plan account: `deepseek-v4.1-flash` and `deepseek-flash` come back
+   * with identical context, features and pricing, yet the first answers
+   * `403 model is not available in the current token plan` while the second
+   * works. The only trustworthy signal is the refusal itself, so it is
+   * remembered here and the id is dropped from the next model list.
+   *
+   * Memory only, and keyed per account: a plan upgrade takes effect when the
+   * process restarts, which is the right trade against storing a wrong "no"
+   * on disk forever.
+   */
+  const refusedModels = new Map();
+
+  /**
+   * Note a model the upstream refused, without touching the response itself.
+   *
+   * The body is read off a clone — the original has to reach the host
+   * untouched, stream included — and only the exact refusal counts, because a
+   * 403 also covers reasons that are not about the plan at all.
+   */
+  const noteRefusedModel = (key, init, res) => {
+    let model;
+    try {
+      model = JSON.parse(typeof init?.body === "string" ? init.body : "{}")?.model;
+    } catch {
+      return;
+    }
+    if (!key || typeof model !== "string" || !model) return;
+    res
+      .clone()
+      .text()
+      .then((body) => {
+        if (!/not available in the current token plan|model is not found/i.test(body)) return;
+        const blocked = refusedModels.get(key) ?? new Set();
+        blocked.add(model);
+        refusedModels.set(key, blocked);
+        log("warn", `sensenova: ${model} is not in this account's plan; hiding it`);
+      })
+      .catch(() => {
+        /* 读不到就算了，下次请求还有机会 */
+      });
+  };
+
+  /**
    * The credential pair for one account.
    *
    * The console credentials come from the sign-in prompts when the user
@@ -255,9 +302,15 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
       /**
        * The models this account can actually use, straight from `/v1/models`.
        *
-       * The only thing removed is the image-creation models, which the catalog
-       * drops because this provider speaks chat completions only. Everything
-       * else the endpoint returns is passed through untouched.
+       * Two things are removed. Image-creation models, which the catalog drops
+       * because this provider speaks chat completions only. And models the
+       * upstream has already refused for this account with `not available in
+       * the current token plan` — `/v1/models` lists what the platform sells,
+       * not what the plan includes, and it carries no field to tell them
+       * apart (实测 `deepseek-v4.1-flash` 与 `deepseek-flash` 的 context、
+       * features、pricing 逐项相同，前者 403、后者 200). So the list is
+       * corrected by what actually happened rather than by a hard-coded id
+       * list, which would be a second snapshot to drift.
        *
        * On failure the last list that was fetched is served and marked with
        * Magpie's fallback flag, so a transient error does not empty the model
@@ -266,9 +319,13 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
        */
       async models(provider, { auth } = {}) {
         const id = provider?.id ?? PROVIDER;
+        const key = apiKeyOf(auth);
+        const blocked = (key && refusedModels.get(key)) || null;
+        /** Hide what the upstream has already rejected for this account. */
+        const visible = (list) => (blocked ? list.filter((m) => !blocked.has(m.id)) : list);
         const asProvider = (list) =>
           Object.fromEntries(
-            list.map((m) => [
+            visible(list).map((m) => [
               m.id,
               toProviderModel(m, id, { baseURL: opts.baseURL ?? catalog.baseURL }),
             ])
@@ -279,7 +336,6 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
           return fellBack(known?.length ? asProvider(known) : (provider?.models ?? {}));
         };
 
-        const key = apiKeyOf(auth);
         if (!key) return remembered();
         try {
           const live = await catalog.load(key);
@@ -317,8 +373,11 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
             else headers.set("authorization", `Bearer ${current}`);
             // A Request carries its own body, and re-issuing one by URL alone
             // silently drops it — so clone it instead of rebuilding the call.
-            if (source) return fetch(new Request(source, { ...init, headers }));
-            return fetch(input, { ...init, headers });
+            const res = source
+              ? await fetch(new Request(source, { ...init, headers }))
+              : await fetch(input, { ...init, headers });
+            if (res.status === 403) noteRefusedModel(current, init, res);
+            return res;
           },
         };
       },

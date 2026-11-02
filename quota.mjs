@@ -381,16 +381,29 @@ async function renewWithPassword(cfg, fetchImpl, t) {
   });
   const loginData = await loginRes.json().catch(() => null);
   if (!loginRes.ok) {
-    const reason = loginData?.details?.find?.((d) => typeof d?.reason === "string")?.reason;
-    const map = {
-      invalidAccountOrPassword: t.loginInvalidAccount,
-      IncorrectPassword: t.loginBadPassword,
-      NotFound: t.loginNoAccount,
-      LoginLocked: t.loginLocked,
-      PermissionDenied: t.loginNoPermission,
-      OperationTooFrequently: t.loginTooFrequent,
+    // IAM 的具体原因藏在 `details[].reason` 里，形如 `operationTooFrequently`。
+    // **大小写不固定**，所以两边都归一化再比 —— 早先的表里写的是
+    // `OperationTooFrequently`，而实测返回的是小写开头，于是这张表从来没命中过，
+    // 用户看到的永远是兜底的「登录被拒绝」。而真实原因往往是「操作过于频繁」：
+    // 账号没事，是插件自己登录得太勤。
+    const detail = Array.isArray(loginData?.details) ? loginData.details : [];
+    // 归一化到「只有小写字母和数字」，这样 `OperationTooFrequently`、
+    // `operationTooFrequently` 与 `operation too frequent` 都落同一个键。
+    const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const pick = (field) =>
+      detail.find((d) => typeof d?.[field] === "string")?.[field]?.trim() || undefined;
+    const reasons = {
+      invalidaccountorpassword: t.loginInvalidAccount,
+      incorrectpassword: t.loginBadPassword,
+      notfound: t.loginNoAccount,
+      loginlocked: t.loginLocked,
+      permissiondenied: t.loginNoPermission,
+      operationtoofrequently: t.loginTooFrequent,
+      toomanyattempts: t.loginTooFrequent,
     };
-    throw new QuotaError(map[reason] || fill(t.loginRejected, { status: loginRes.status }));
+    // `reason` 更具体，`message` 只是 `PermissionDenied` 这类粗粒度结论，所以后者兜底。
+    const text = reasons[norm(pick("reason") ?? "")] ?? reasons[norm(pick("message") ?? "")];
+    throw new QuotaError(text ?? fill(t.loginRejected, { status: loginRes.status }));
   }
   const next = typeof loginData?.redirect === "string" ? loginData.redirect.trim() : "";
   if (!next) throw new QuotaError(t.noRedirect);

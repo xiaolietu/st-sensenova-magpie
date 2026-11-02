@@ -173,13 +173,19 @@ Magpie 还会合并它自己 models.dev 里的 `sensenova` 条目，可能引入
 | `deepseek-flash` | ✓ | 200（偶发 429，见下） |
 | `deepseek-v4.1-flash` | ✓ | **403 `model is not available in the current token plan`** |
 
-`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。平台自己的模型总览也没有列它。
+`deepseek-v4.1-flash` 与 `deepseek-flash` 的响应字段**逐项对比完全一致**（context、features、pricing、`businesses` 都是 `["tokenplan","metered"]`），接口没有提供任何「本套餐不可用」的标记。平台自己的模型总览也没有列它 —— 那份总览写的是 **DeepSeek V4.1 Flash → `deepseek-flash`**。
 
-所以插件**照实列出**，不做过滤：能过滤的依据只有 id，而写死 id 就成了第二份快照，换账号或平台补货都会误判。遇到 403 就是套餐不含该模型。
+所以插件不内置任何 id 黑名单（写死 id 就成了第二份快照，换账号或平台补货都会误判），而是**用实际结果纠正列表**：某个模型真的被上游以 `not available in the current token plan` 拒过，就把这个 id 从该账号的列表里去掉，`provider.models` 下次不再给出它。
+
+- **按账号记**：换个账号或套餐不同，各自判断；
+- **只认那一句原话**：403 还覆盖权限、风控等含义，那些不动列表；
+- **只在内存里**：套餐升级后重启进程就恢复，不会把一个错误的「不行」永久写进磁盘。
 
 另有一种**限流**：连续快速请求时 `deepseek-flash` 会返回 `429 inference exceeds tpm/rpm limit`，等待 20 秒后恢复正常。这是速率限制，不是模型不可用 —— 阈值低到同一秒的第二个请求就会挂，所以插件把每个账号的并发声明为 1，见[并发上限](#并发上限每个账号-1-个请求)。
 
-文档的[模型总览](https://platform.sensenova.cn/docs)只列了两个 DeepSeek 模型（V4 Flash → `deepseek-v4-flash`、V4.1 Flash → `deepseek-flash`），而接口多返回了 `deepseek-v4.1-flash` —— 文档与接口并不同步，**以接口为准**。
+实测量级（2026-11-02，同一账号连续探测）：单个模型连发第二次就能触发 429，间隔 20 秒仍然 429，而同时 `sensenova-6.8-flash-lite` 200 正常。所以**「能请求通但用不了」通常就是这个限流**，不是模型坏了：偶发的一次 200 之后紧跟着就是 429，agent 多步任务里根本跑不完。
+
+文档的[模型总览](https://platform.sensenova.cn/docs)只列了 5 个模型（`sensenova-6.8-flash-lite`、`deepseek-v4-flash`、`deepseek-flash`、`glm-5.2`、`kimi-k3`），而 `/v1/models` 返回 7 个，多出 `deepseek-v4.1-flash` 和 `sensenova-6.8-flash` —— 文档与接口并不同步，**以接口为准**，可用性以实际请求为准。
 
 ---
 
@@ -236,6 +242,15 @@ Magpie 的插件系统**不允许插件新增面板或页面**，也没有任何
 | 失败后 15 秒又重试一次 | 旧实现用 `now - ttl + 15_000` 让失败条目只等 15 秒 | 1 分钟起、逐次翻倍；续期链路整体失败（`kind: "auth"`，密码登录被拒）封顶 2 小时 |
 
 密码登录被拒这类失败**不会自愈**，只会随着用户重新登录而消失。按分钟级反复重试既没有任何收益，又会让 IAM 的风控把账号锁得更死 —— 这正是当初 403 的来源。
+
+第四个坑是错误信息本身。IAM 把真实原因放在 `details[].reason` 里，且**大小写不固定**：
+
+```json
+{"code":7,"message":"PermissionDenied",
+ "details":[{"reason":"operationTooFrequently"},{"message":"operation too frequent"}]}
+```
+
+早先的映射表写的是 `OperationTooFrequently`（大写开头），于是这条从来命中不了，真实原因「操作过于频繁」被兜底成了「登录被拒绝」—— 用户看到只会以为登录过期，反复重登，而那恰好又加重了这个限流。现在两侧都归一化再比，`reason` 优先、`message` 兜底，报出来的是「操作过于频繁」。
 
 ### 额度是账户级的，不按 Key 拆分
 
@@ -331,7 +346,7 @@ magpie plugin options sensenova '{"locale":"en"}'
 ## 六、已知限制
 
 - **默认每个账号只跑 1 个请求。** 平台限流阈值极低（同一秒的第二个请求就 429），插件因此在 `package.json` 里声明 `maxConcurrency: 1`。代价是多个 agent 同时干活时会排队；账号页下拉手动改成 2/3/5/10 或「不限制」即可，用户的选择优先。
-- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段，所以插件照实展示 —— 遇到 403 就是套餐不含该模型。
+- **列表里的模型不一定能用。** 接口会列出当前套餐不可用的模型（实测 `deepseek-v4.1-flash` 返回 403），响应里没有任何可判别的字段。插件照实展示，但**被上游以「不在当前套餐」拒过的那个 id 会被记住，并从该账号的列表里移除**（见[第三节](#列表里的模型不一定都能用)），所以通常只会撞一次。
 - **思考与正文共享 `max_tokens`。** 把 `max_tokens` 设得很小时（实测 16、32），模型会把预算全用在思考上，正文返回空、`finish_reason` 为 `length`。这不是错误响应，调大即可；代码类任务建议 ≥ 4096。
 - **额度只出现在三处** —— 账号行、`magpie quota`、`/v1/magpie/quotas` —— 无法进入用量概览页。这是 Magpie 的设计，不是本插件没做到。
 - 控制台令牌过期且三条续期路径全部失败时（refresh token 被吊销、Cookie 过期、密码错误），账号行会显示一条错误，**仅此而已**：额度不显示，模型调用照常，账号也不会被标记为需重新登录（见[额度失败不能连累账号](#额度失败不能连累账号)）。
@@ -541,7 +556,7 @@ Magpie 自己会读 `plugin-auth.json`（管理登录态）、`plugins.json`（�
 node --test test/*.test.mjs
 ```
 
-当前 90 个测试，覆盖：
+当前 93 个测试，覆盖：
 
 - 清单声明（`magpie.maxConcurrency` 必须是 1 且在 1–1000 范围内、`type` / `main` / 版本号形状、`files` 列出全部被导入的模块）；
 
@@ -556,6 +571,8 @@ node --test test/*.test.mjs
 - 模型目录的缓存行为（按 key 分桶、同一 key 并发只发一次请求、拉取失败保留上一份好数据、`fetchImpl` 同步抛错不会永久污染该 key）；
 - 额度缓存的隔离（同一账号重复调用只请求一次、不同账号不共用条目、续期链路顺序为 `/oauth2/auth` → `/oauth2/token` → 额度接口）；
 - **额度失败不连累账号**（失败与「没有控制台凭据」两种情形都带 `signIn: "kept"`、续期到的令牌在内存里复用因此一个进程只登录一次、失败后退避且 16 秒内不重登、续期整体失败时封顶 2 小时）；
+- IAM 的失败原因归一化后能认出 `operationTooFrequently`（实测响应体直接做用例），不再退化成「登录被拒绝」；
+- 被上游以「不在当前套餐」拒过的模型会从该账号的列表里消失，而其它含义的 403 不动列表；
 - 登录方法只声明 `email` 与 `password` 两条提示，不含 `key`，也不声明 `authorize`（key 由宿主自己的输入框收集）；
 - 语言解析（显式指定、系统、环境变量、POSIX `C`）；两张字符串表保持同步；
 - 共享池不被套用专属池的命名规则；
