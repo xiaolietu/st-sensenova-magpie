@@ -3,9 +3,13 @@
  *
  * `maxConcurrency` is not read by any code in this repository — Magpie reads it
  * out of package.json, and the account page's 「沿用供应商」 option shows that
- * number. Nothing here would catch it being dropped, which is why it is pinned:
- * without it the provider falls back to unlimited and the platform answers 429
- * to the second request of the same second.
+ * number. Nothing here would catch it being dropped, which is why it is pinned.
+ *
+ * The value is 5 because that is what the platform allows, measured:
+ * 4 concurrent → 4/4, 5 → 5/5 (twice, and again with max_tokens 4096 and
+ * outputs up to 27s), 6 → 5/6 (twice), 8 → 5/8, 12 → 5/12. The ceiling is per
+ * model, not per account: 3+3 across two models puts 6 requests in flight and
+ * all six answer.
  */
 
 import { test } from "node:test";
@@ -17,8 +21,8 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
-test("declares a concurrency ceiling of 1 per account", () => {
-  assert.equal(pkg.magpie?.maxConcurrency, 1);
+test("declares the measured concurrency ceiling, 5", () => {
+  assert.equal(pkg.magpie?.maxConcurrency, 5);
 });
 
 test("the ceiling stays inside the range Magpie accepts", () => {

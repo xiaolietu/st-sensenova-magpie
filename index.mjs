@@ -150,6 +150,44 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
   };
 
   /**
+   * Record why a 429 happened, once per model per code.
+   *
+   * All four throttle reasons arrive with the same message — "inference
+   * exceeds tpm/rpm limit" — and only `error.code` separates "burst, retry in
+   * a second" from "this model's quota is spent until it is topped up".
+   * Magpie shows that message to the user, so without this line nothing
+   * anywhere says which one it was. Log once per code so a flapping model
+   * cannot flood the log.
+   */
+  const notedCodes = new Map();
+  const noteRateLimit = (key, init, res) => {
+    let model;
+    try {
+      model = JSON.parse(typeof init?.body === "string" ? init.body : "{}")?.model;
+    } catch {
+      return;
+    }
+    if (!key || typeof model !== "string" || !model) return;
+    res
+      .clone()
+      .text()
+      .then((body) => {
+        let code;
+        try {
+          code = JSON.parse(body)?.error?.code;
+        } catch {
+          return;
+        }
+        if (typeof code !== "string" || !code || notedCodes.get(`${key}|${model}`) === code) return;
+        notedCodes.set(`${key}|${model}`, code);
+        log("warn", `sensenova: ${model} answered 429 ${code}`);
+      })
+      .catch(() => {
+        /* 读不到就算了，本来只是诊断信息 */
+      });
+  };
+
+  /**
    * The credential pair for one account.
    *
    * The console credentials come from the sign-in prompts when the user
@@ -357,6 +395,7 @@ export async function SenseNovaPlugin({ client } = {}, options = {}) {
               ? await fetch(new Request(source, { ...init, headers }))
               : await fetch(input, { ...init, headers });
             if (res.status === 403) noteRefusedModel(current, init, res);
+            else if (res.status === 429) noteRateLimit(current, init, res);
             return res;
           },
         };

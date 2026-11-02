@@ -309,3 +309,31 @@ test("consoleAuthOf 认 email，也兼容旧的 username / account 拼写", asyn
   assert.equal(consoleAuthOf({ metadata: { email: "   " } }).username, undefined);
   assert.equal(consoleAuthOf(undefined).username, undefined);
 });
+
+test("429 的 error.code 会记进日志，且同一模型同一码只记一次", async () => {
+  // 四种 429 共用同一句 message，只有 code 能区分「等一秒」和「额度没了」。
+  const logs = [];
+  const client = { app: { log: (x) => logs.push(x.body.message) } };
+  const auth = { type: "api", key: "sk-1" };
+  const real = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: { message: "inference exceeds tpm/rpm limit", code: "insufficient_quota" } }), { status: 429 });
+  try {
+    const plugin = await SenseNovaPlugin({ client }, {});
+    const { fetch: wrapped } = await plugin.auth.loader(async () => auth);
+    const req = () =>
+      wrapped("https://token.sensenova.cn/v1/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({ model: "glm-5.2", messages: [] }),
+      });
+    await req();
+    await new Promise((r) => setTimeout(r, 0));
+    await req();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(logs.length, 1, "同一个码不该重复刷日志");
+    assert.match(logs[0], /glm-5\.2/);
+    assert.match(logs[0], /insufficient_quota/);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
